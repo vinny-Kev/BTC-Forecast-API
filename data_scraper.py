@@ -13,17 +13,30 @@ load_dotenv()
 API_KEY = os.getenv('BINANCE_API_KEY')
 API_SECRET = os.getenv('BINANCE_SECRET_KEY')
 
-# Validate that API keys are provided
-if not API_KEY or not API_SECRET:
-    raise ValueError("Please set BINANCE_API_KEY and BINANCE_SECRET_KEY in your .env file")
+# Global client variable
+client = None
 
-client = Client(API_KEY, API_SECRET)
+def get_client():
+    """Initialize Binance client lazily"""
+    global client
+    if client is None:
+        # Validate that API keys are provided
+        if not API_KEY or not API_SECRET:
+            raise ValueError("Please set BINANCE_API_KEY and BINANCE_SECRET_KEY in your .env file")
+        client = Client(API_KEY, API_SECRET)
+    return client
 
 class DataScraper:
     def __init__(self, symbol="BTCUSDT", interval="5m"):
-        self.client = client
+        self.client = None  # Initialize lazily
         self.symbol = symbol
         self.interval = interval
+    
+    def _get_client(self):
+        """Get client, initializing if needed"""
+        if self.client is None:
+            self.client = get_client()
+        return self.client
         self.ws_manager = None
         self.data = []
         self.twm = None
@@ -31,7 +44,7 @@ class DataScraper:
 #================= Historical Data Fetching =================#
     def fetch_historical_(self, lookback_days="1 day ago UTC"):
        """Fetch historical data for model training."""
-       klines = self.client.get_historical_klines(self.symbol, self.interval, lookback_days)
+       klines = self._get_client().get_historical_klines(self.symbol, self.interval, lookback_days)
        df = pd.DataFrame(klines, columns =[
            "timestamp", "open", "high", "low", "close", "volume", "close_time",
            "quote_asset_volume", "number_of_trades", "taker_buy_base", "taker_buy_quote", "ignore"
@@ -65,7 +78,7 @@ class DataScraper:
 
     ## Order book depth to get liquidity context
     def fetch_order_book_context(self, depth=20):
-        order_book = self.client.get_order_book(symbol=self.symbol, limit=depth)
+        order_book = self._get_client().get_order_book(symbol=self.symbol, limit=depth)
         bids = pd.DataFrame(order_book['bids'], columns=['price', 'quantity']).astype(float)
         asks = pd.DataFrame(order_book['asks'], columns=['price', 'quantity']).astype(float)
 
@@ -79,7 +92,7 @@ class DataScraper:
 
     ## 24h ticker for volatility context
     def fetch_24h_ticker_context(self):
-        ticker = self.client.get_ticker(symbol=self.symbol)
+        ticker = self._get_client().get_ticker(symbol=self.symbol)
         context = {
             "price_change_percent" : float(ticker['priceChangePercent']),
             "high_price": float(ticker['highPrice']),
@@ -95,7 +108,7 @@ class DataScraper:
         """Fetch recent data for context in feature generation."""
         end_time = int(datetime.now().timestamp() * 1000)
         start_time = end_time - (1000 * 60 * 60 * 24)  # Last 24 hours
-        klines = self.client.get_klines(symbol=self.symbol, interval=self.interval, startTime=start_time, endTime=end_time)
+        klines = self._get_client().get_klines(symbol=self.symbol, interval=self.interval, startTime=start_time, endTime=end_time)
         df = pd.DataFrame(klines, columns=[
             'open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time',
             'quote_asset_volume', 'number_of_trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])

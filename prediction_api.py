@@ -17,7 +17,7 @@ from datetime import datetime
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from data_scraper import DataScraper
+# Import modules - defer DataScraper initialization
 from feature_engineering import FeatureEngineer
 from models import EnsembleModel
 
@@ -79,76 +79,123 @@ def load_models(model_dir: str):
     
     print(f"Loading models from {model_dir}...")
     
+    # Check if directory exists and list contents
+    if not os.path.exists(model_dir):
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+    
+    print(f"Directory contents: {os.listdir(model_dir)}")
+    
     # Load ensemble
     ensemble_model = EnsembleModel(n_classes=3)
     ensemble_model.load(model_dir)
     
     # Load preprocessor
     preprocessor_path = os.path.join(model_dir, 'preprocessor.pkl')
-    preprocessor = joblib.load(preprocessor_path)
-    print(f"✓ Preprocessor loaded")
+    if os.path.exists(preprocessor_path):
+        preprocessor = joblib.load(preprocessor_path)
+        print(f"✓ Preprocessor loaded")
+    else:
+        raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
     
     # Load feature columns
     feature_cols_path = os.path.join(model_dir, 'feature_columns.pkl')
-    feature_columns = joblib.load(feature_cols_path)
-    print(f"✓ Feature columns loaded ({len(feature_columns)} features)")
+    if os.path.exists(feature_cols_path):
+        feature_columns = joblib.load(feature_cols_path)
+        print(f"✓ Feature columns loaded ({len(feature_columns)} features)")
+    else:
+        raise FileNotFoundError(f"Feature columns not found: {feature_cols_path}")
     
     # Load metadata
     import json
     metadata_path = os.path.join(model_dir, 'metadata.json')
-    with open(metadata_path, 'r') as f:
-        metadata = json.load(f)
-    
-    sequence_length = metadata.get('sequence_length', 30)
-    print(f"✓ Metadata loaded (sequence_length: {sequence_length})")
+    if os.path.exists(metadata_path):
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+        
+        sequence_length = metadata.get('sequence_length', 30)
+        print(f"✓ Metadata loaded (sequence_length: {sequence_length})")
+    else:
+        print(f"⚠ Metadata not found at {metadata_path}, using defaults")
+        metadata = {"sequence_length": 30, "threshold_percent": 0.5}
+        sequence_length = 30
     
     # Initialize feature engineer
     feature_engineer = FeatureEngineer()
     print(f"✓ Feature engineer initialized")
     
-    print("✓ All models loaded successfully!")
+    print("✓ Model loading completed!")
 
 
 def get_latest_model_dir(base_dir='data/models'):
     """Get the most recent model directory"""
-    if not os.path.exists(base_dir):
-        return None
-    
-    # Get all subdirectories
-    subdirs = [
-        os.path.join(base_dir, d) 
-        for d in os.listdir(base_dir) 
-        if os.path.isdir(os.path.join(base_dir, d))
+    # Try different possible paths
+    possible_paths = [
+        base_dir,
+        './data/models',
+        'data/models',
+        os.path.join(os.path.dirname(__file__), 'data', 'models')
     ]
     
-    if not subdirs:
-        return None
+    for path in possible_paths:
+        if os.path.exists(path):
+            # Get all subdirectories
+            subdirs = [
+                os.path.join(path, d) 
+                for d in os.listdir(path) 
+                if os.path.isdir(os.path.join(path, d))
+            ]
+            
+            if subdirs:
+                # Sort by modification time, get latest
+                latest_dir = max(subdirs, key=os.path.getmtime)
+                return latest_dir
     
-    # Sort by modification time, get latest
-    latest_dir = max(subdirs, key=os.path.getmtime)
-    return latest_dir
+    return None
 
 
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup"""
-    # Try to load the latest model (look in parent directory's data/models)
-    model_dir = get_latest_model_dir('./data/models')
+    global ensemble_model
+    
+    print(f"Starting up API...")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
+    
+    # Try to load the latest model
+    model_dir = get_latest_model_dir()
     
     if model_dir:
+        print(f"Found model directory: {model_dir}")
         try:
             load_models(model_dir)
             print(f"✓ API ready with models from: {model_dir}")
         except Exception as e:
             print(f"⚠ Warning: Could not load models: {e}")
             print("API will run without loaded models. Train models first.")
+            ensemble_model = None
     else:
-        print("⚠ No models found. Please train models first using train_pipeline.py")
+        print("⚠ No models found in any of the expected locations:")
+        print("  - ./data/models")
+        print("  - data/models") 
+        print(f"  - {os.path.join(os.path.dirname(__file__), 'data', 'models')}")
+        print("Please train models first using the training pipeline.")
+        ensemble_model = None
 
 
 @app.get("/", response_model=HealthResponse)
 async def health_check():
     """Health check endpoint"""
+    return HealthResponse(
+        status="healthy",
+        model_loaded=ensemble_model is not None,
+        timestamp=datetime.now().isoformat()
+    )
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    """Health endpoint for deployment monitoring"""
     return HealthResponse(
         status="healthy",
         model_loaded=ensemble_model is not None,
@@ -174,6 +221,9 @@ async def predict(request: PredictionRequest):
         )
     
     try:
+        # Import DataScraper only when needed (to defer API key validation)
+        from data_scraper import DataScraper
+        
         # Fetch live data
         scraper = DataScraper(symbol=request.symbol, interval=request.interval)
         

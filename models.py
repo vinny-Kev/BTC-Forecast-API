@@ -327,8 +327,19 @@ class LSTMModel:
             self.compile()
             print(f"✓ LSTM model loaded from {path}")
         except Exception as e:
-            print(f"⚠ Error loading LSTM model: {e}")
-            raise
+            print(f"⚠ Error loading LSTM model from {path}: {e}")
+            # Try alternative loading methods
+            try:
+                import tensorflow as tf
+                # Try loading as SavedModel format
+                self.model = tf.keras.models.load_model(path, compile=False)
+                self.compile()
+                print(f"✓ LSTM model loaded from {path} (alternative method)")
+            except Exception as e2:
+                print(f"⚠ Failed to load LSTM model with alternative method: {e2}")
+                print("LSTM model will be unavailable for predictions.")
+                self.model = None
+                # Don't raise - let the ensemble continue without LSTM
 
 
 class EnsembleModel:
@@ -365,17 +376,30 @@ class EnsembleModel:
         if self.weights is None:
             self.set_weights()
         
-        # Get predictions from each model
-        catboost_proba = self.catboost.predict_proba(X_regular)
-        rf_proba = self.random_forest.predict_proba(X_regular)
-        lstm_proba = self.lstm.predict_proba(X_lstm)
+        predictions = []
+        weights_sum = 0
         
-        # Weighted average
-        ensemble_proba = (
-            self.weights['catboost'] * catboost_proba +
-            self.weights['rf'] * rf_proba +
-            self.weights['lstm'] * lstm_proba
-        )
+        # Get predictions from available models
+        if self.catboost.model is not None:
+            catboost_proba = self.catboost.predict_proba(X_regular)
+            predictions.append(self.weights['catboost'] * catboost_proba)
+            weights_sum += self.weights['catboost']
+        
+        if self.random_forest.model is not None:
+            rf_proba = self.random_forest.predict_proba(X_regular)
+            predictions.append(self.weights['rf'] * rf_proba)
+            weights_sum += self.weights['rf']
+        
+        if self.lstm.model is not None:
+            lstm_proba = self.lstm.predict_proba(X_lstm)
+            predictions.append(self.weights['lstm'] * lstm_proba)
+            weights_sum += self.weights['lstm']
+        
+        if not predictions:
+            raise ValueError("No models available for prediction")
+        
+        # Normalize weights and combine predictions
+        ensemble_proba = sum(predictions) / weights_sum if weights_sum > 0 else sum(predictions) / len(predictions)
         
         return ensemble_proba
     
@@ -400,12 +424,40 @@ class EnsembleModel:
     
     def load(self, save_dir):
         """Load all models"""
-        self.catboost.load(os.path.join(save_dir, 'catboost_model.cbm'))
-        self.random_forest.load(os.path.join(save_dir, 'random_forest_model.pkl'))
-        self.lstm.load(os.path.join(save_dir, 'lstm_model.h5'))
+        models_loaded = []
         
-        # Load weights
-        with open(os.path.join(save_dir, 'ensemble_weights.json'), 'r') as f:
-            self.weights = json.load(f)
+        try:
+            self.catboost.load(os.path.join(save_dir, 'catboost_model.cbm'))
+            models_loaded.append('CatBoost')
+        except Exception as e:
+            print(f"⚠ Failed to load CatBoost: {e}")
+        
+        try:
+            self.random_forest.load(os.path.join(save_dir, 'random_forest_model.pkl'))
+            models_loaded.append('Random Forest')
+        except Exception as e:
+            print(f"⚠ Failed to load Random Forest: {e}")
+        
+        try:
+            self.lstm.load(os.path.join(save_dir, 'lstm_model.h5'))
+            models_loaded.append('LSTM')
+        except Exception as e:
+            print(f"⚠ Failed to load LSTM: {e}")
+            self.lstm.model = None
+        
+        # Load weights and adjust for missing models
+        try:
+            with open(os.path.join(save_dir, 'ensemble_weights.json'), 'r') as f:
+                self.weights = json.load(f)
+        except Exception as e:
+            print(f"⚠ Failed to load ensemble weights: {e}")
+            # Set default weights based on available models
+            if len(models_loaded) == 3:
+                self.set_weights(0.4, 0.3, 0.3)
+            elif len(models_loaded) == 2:
+                self.set_weights(0.5, 0.5, 0.0)
+            else:
+                self.set_weights(1.0, 0.0, 0.0)
         
         print(f"✓ Ensemble models loaded from {save_dir}")
+        print(f"  Available models: {', '.join(models_loaded)}")
