@@ -1,53 +1,42 @@
 """
 Machine Learning Models Module
-Contains CatBoost, Random Forest, and LSTM models with custom configurations
+Contains CatBoost, Random Forest, and Logistic Regression models for Bitcoin prediction
+No LSTM - removed for better performance and reliability
 """
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.ensemble import RandomForestClassifier
-from tensorflow import keras
-from tensorflow.keras import layers, callbacks
-from tensorflow.keras.utils import to_categorical
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 import joblib
 import json
 import os
 
 
 class CatBoostModel:
-    """CatBoost model with class weighting"""
+    """CatBoost Gradient Boosting model"""
     
     def __init__(self, n_classes=3):
         self.n_classes = n_classes
         self.model = None
         
-    def build(self, class_weights=None, iterations=1000, depth=6, learning_rate=0.03, 
-                    l2_leaf_reg=3, bagging_temperature=1.0, random_strength=1.0):
+    def build(self, iterations=500, learning_rate=0.1, depth=6, l2_leaf_reg=3, 
+              random_strength=1, bagging_temperature=1, class_weights=None):
         """Build CatBoost model with regularization"""
-        
-        # Convert class weights to CatBoost format
-        if class_weights:
-            # CatBoost expects weights as a list or array for each sample
-            # We'll use auto_class_weights instead
-            class_weights_mode = 'Balanced'
-        else:
-            class_weights_mode = None
         
         self.model = CatBoostClassifier(
             iterations=iterations,
-            depth=depth,
             learning_rate=learning_rate,
-            l2_leaf_reg=l2_leaf_reg,  # L2 regularization
-            bagging_temperature=bagging_temperature,  # Bayesian bagging intensity
-            random_strength=random_strength,  # Randomness for scoring splits
-            loss_function='MultiClass',
-            eval_metric='TotalF1',
-            auto_class_weights=class_weights_mode,
+            depth=depth,
+            l2_leaf_reg=l2_leaf_reg,
+            random_strength=random_strength,
+            bagging_temperature=bagging_temperature,
+            verbose=False,
             random_seed=42,
-            verbose=100,
-            early_stopping_rounds=50,
-            task_type='CPU'
+            class_weights=class_weights,
+            loss_function='MultiClass' if self.n_classes > 2 else 'Logloss'
         )
         
         print("✓ CatBoost model built")
@@ -57,20 +46,16 @@ class CatBoostModel:
         """Train CatBoost model"""
         print("\nTraining CatBoost...")
         
-        if X_val is not None and y_val is not None and len(X_val) > 0:
+        eval_set = None
+        if X_val is not None and y_val is not None:
             eval_set = (X_val, y_val)
-            self.model.fit(
-                X_train, y_train,
-                eval_set=eval_set,
-                use_best_model=True,
-                plot=False
-            )
-        else:
-            # Train without validation set
-            self.model.fit(
-                X_train, y_train,
-                plot=False
-            )
+        
+        self.model.fit(
+            X_train, y_train,
+            eval_set=eval_set,
+            verbose=False,
+            early_stopping_rounds=50 if eval_set else None
+        )
         
         print("✓ CatBoost training complete")
         return self
@@ -105,29 +90,30 @@ class CatBoostModel:
 
 
 class RandomForestModel:
-    """Random Forest model with class weighting"""
+    """Random Forest ensemble model"""
     
     def __init__(self, n_classes=3):
         self.n_classes = n_classes
         self.model = None
         
-    def build(self, class_weights=None, n_estimators=200, max_depth=15, 
-                    min_samples_split=10, min_samples_leaf=5, max_features='sqrt'):
-        """Build Random Forest model with regularization"""
+    def build(self, class_weights=None, n_estimators=50, max_depth=8, 
+                    min_samples_split=20, min_samples_leaf=10, max_features='sqrt'):
+        """Build Random Forest model with reduced complexity to prevent overfitting"""
         
         self.model = RandomForestClassifier(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_split=min_samples_split,  # Regularization: higher = less overfitting
-            min_samples_leaf=min_samples_leaf,    # Regularization: higher = less overfitting
-            max_features=max_features,            # Limit features per split
+            n_estimators=n_estimators,        # Reduced from 200 to 50
+            max_depth=max_depth,              # Reduced from 15 to 8  
+            min_samples_split=min_samples_split,  # Increased from 10 to 20
+            min_samples_leaf=min_samples_leaf,    # Increased from 5 to 10
+            max_features=max_features,            # Keep sqrt for regularization
             class_weight='balanced' if class_weights else None,
             random_state=42,
             n_jobs=-1,
             verbose=1
         )
         
-        print("✓ Random Forest model built")
+        print("✓ Random Forest model built with reduced complexity")
+        print(f"  Architecture: {n_estimators} trees, max_depth={max_depth}, regularization enhanced")
         return self
     
     def train(self, X_train, y_train, X_val=None, y_val=None):
@@ -167,208 +153,109 @@ class RandomForestModel:
         print(f"✓ Random Forest model loaded from {path}")
 
 
-class LSTMModel:
-    """LSTM model for sequence prediction"""
+class LogisticRegressionModel:
+    """Logistic Regression model for baseline and ensemble balance"""
     
     def __init__(self, n_classes=3):
         self.n_classes = n_classes
         self.model = None
-        self.history = None
+        self.scaler = StandardScaler()
         
-    def build(self, input_shape, lstm_units=[128, 64], dropout=0.3, recurrent_dropout=0.0, l2_reg=0.0):
-        """
-        Build LSTM model with regularization
+    def build(self, class_weights=True, C=1.0, max_iter=1000, solver='lbfgs'):
+        """Build Logistic Regression model"""
         
-        Args:
-            input_shape: (timesteps, features)
-            lstm_units: List of LSTM layer units
-            dropout: Dropout rate for dropout layers
-            recurrent_dropout: Dropout rate for recurrent connections
-            l2_reg: L2 regularization strength
-        """
-        from tensorflow.keras import regularizers
+        self.model = LogisticRegression(
+            C=C,                              # Regularization strength (lower = more regularization)
+            max_iter=max_iter,
+            solver=solver,                    # lbfgs works well for small datasets
+            class_weight='balanced' if class_weights else None,
+            random_state=42,
+            multi_class='ovr'                 # One-vs-rest for multi-class
+        )
         
-        model = keras.Sequential()
-        
-        # First LSTM layer with regularization
-        model.add(layers.LSTM(
-            lstm_units[0],
-            input_shape=input_shape,
-            return_sequences=len(lstm_units) > 1,
-            dropout=dropout,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        
-        # Additional LSTM layers with regularization
-        for i, units in enumerate(lstm_units[1:]):
-            return_seq = i < len(lstm_units) - 2
-            model.add(layers.LSTM(
-                units, 
-                return_sequences=return_seq,
-                dropout=dropout,
-                recurrent_dropout=recurrent_dropout,
-                kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-            ))
-        
-        # Dense layers with L2 regularization
-        model.add(layers.Dense(
-            64, 
-            activation='relu',
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        model.add(layers.Dropout(dropout))
-        model.add(layers.Dense(
-            32, 
-            activation='relu',
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        model.add(layers.Dropout(dropout / 2))
-        
-        # Output layer
-        model.add(layers.Dense(self.n_classes, activation='softmax'))
-        
-        self.model = model
-        
-        print("✓ LSTM model built with regularization")
-        print(f"  Architecture: LSTM{lstm_units} → Dense[64, 32] → Softmax({self.n_classes})")
-        print(f"  Regularization: Dropout={dropout}, Recurrent Dropout={recurrent_dropout}, L2={l2_reg}")
-        
+        print("✓ Logistic Regression model built")
+        print(f"  Regularization: C={C}, solver={solver}")
         return self
     
-    def compile(self, learning_rate=0.001, class_weights=None):
-        """Compile LSTM model"""
+    def train(self, X_train, y_train, X_val=None, y_val=None):
+        """Train Logistic Regression model with feature scaling"""
+        print("\nTraining Logistic Regression...")
         
-        optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
+        # Scale features for logistic regression
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        self.model.fit(X_train_scaled, y_train)
         
-        # For weighted loss, we'll use sample weights during training
-        # Use SparseCategoricalAccuracy since we have integer labels
-        self.model.compile(
-            optimizer=optimizer,
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']  # Removed F1Score to avoid shape mismatch
-        )
-        
-        print("✓ LSTM model compiled")
-        return self
-    
-    def train(self, X_train, y_train, X_val=None, y_val=None, 
-             class_weights=None, epochs=50, batch_size=32):
-        """Train LSTM model"""
-        print("\nTraining LSTM...")
-        
-        # Create sample weights from class weights
-        sample_weights = None
-        if class_weights:
-            sample_weights = np.array([class_weights[y] for y in y_train])
-        
-        # Callbacks
-        early_stop = callbacks.EarlyStopping(
-            monitor='val_loss' if X_val is not None and len(X_val) > 0 else 'loss',
-            patience=10,
-            restore_best_weights=True,
-            verbose=1
-        )
-        
-        reduce_lr = callbacks.ReduceLROnPlateau(
-            monitor='val_loss' if X_val is not None and len(X_val) > 0 else 'loss',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6,
-            verbose=1
-        )
-        
-        # Train with or without validation
-        if X_val is not None and y_val is not None and len(X_val) > 0:
-            self.history = self.model.fit(
-                X_train, y_train,
-                validation_data=(X_val, y_val),
-                sample_weight=sample_weights,
-                epochs=epochs,
-                batch_size=batch_size,
-                callbacks=[early_stop, reduce_lr],
-                verbose=1
-            )
-        else:
-            # Train without validation
-            self.history = self.model.fit(
-                X_train, y_train,
-                sample_weight=sample_weights,
-                epochs=epochs,
-                batch_size=batch_size,
-                callbacks=[early_stop, reduce_lr],
-                verbose=1
-            )
-        
-        print("✓ LSTM training complete")
+        print("✓ Logistic Regression training complete")
         return self
     
     def predict(self, X):
         """Get predictions"""
-        probs = self.model.predict(X, verbose=0)
-        return np.argmax(probs, axis=1)
+        X_scaled = self.scaler.transform(X)
+        return self.model.predict(X_scaled)
     
     def predict_proba(self, X):
         """Get prediction probabilities"""
-        return self.model.predict(X, verbose=0)
+        X_scaled = self.scaler.transform(X)
+        return self.model.predict_proba(X_scaled)
+    
+    def get_feature_importance(self, feature_names):
+        """Get feature importance (coefficients)"""
+        if self.n_classes == 2:
+            coeffs = self.model.coef_[0]
+        else:
+            # For multi-class, use average absolute coefficients
+            coeffs = np.mean(np.abs(self.model.coef_), axis=0)
+        
+        feature_importance = pd.DataFrame({
+            'feature': feature_names,
+            'importance': np.abs(coeffs)
+        }).sort_values('importance', ascending=False)
+        return feature_importance
     
     def save(self, path):
-        """Save model in Keras 3 compatible format"""
-        # Save with save_format='tf' for better compatibility
-        self.model.save(path, save_format='keras')
-        print(f"✓ LSTM model saved to {path}")
+        """Save model and scaler"""
+        model_data = {
+            'model': self.model,
+            'scaler': self.scaler
+        }
+        joblib.dump(model_data, path)
+        print(f"✓ Logistic Regression model saved to {path}")
     
     def load(self, path):
-        """Load model with compatibility handling"""
-        try:
-            # Try loading with compile=False to avoid optimizer issues
-            self.model = keras.models.load_model(path, compile=False)
-            # Recompile the model
-            self.compile()
-            print(f"✓ LSTM model loaded from {path}")
-        except Exception as e:
-            print(f"⚠ Error loading LSTM model from {path}: {e}")
-            # Try alternative loading methods
-            try:
-                import tensorflow as tf
-                # Try loading as SavedModel format
-                self.model = tf.keras.models.load_model(path, compile=False)
-                self.compile()
-                print(f"✓ LSTM model loaded from {path} (alternative method)")
-            except Exception as e2:
-                print(f"⚠ Failed to load LSTM model with alternative method: {e2}")
-                print("LSTM model will be unavailable for predictions.")
-                self.model = None
-                # Don't raise - let the ensemble continue without LSTM
+        """Load model and scaler"""
+        model_data = joblib.load(path)
+        self.model = model_data['model']
+        self.scaler = model_data['scaler']
+        print(f"✓ Logistic Regression model loaded from {path}")
 
 
 class EnsembleModel:
-    """Ensemble of CatBoost, Random Forest, and LSTM models"""
+    """Ensemble of CatBoost, Random Forest, and Logistic Regression models"""
     
     def __init__(self, n_classes=3):
         self.n_classes = n_classes
         self.catboost = CatBoostModel(n_classes)
         self.random_forest = RandomForestModel(n_classes)
-        self.lstm = LSTMModel(n_classes)
+        self.logistic = LogisticRegressionModel(n_classes)
         self.weights = None
         
-    def set_weights(self, catboost_weight=0.4, rf_weight=0.3, lstm_weight=0.3):
-        """Set ensemble weights"""
-        total = catboost_weight + rf_weight + lstm_weight
+    def set_weights(self, catboost_weight=0.5, rf_weight=0.25, logistic_weight=0.25):
+        """Set ensemble weights - 3 model ensemble"""
+        total = catboost_weight + rf_weight + logistic_weight
         self.weights = {
             'catboost': catboost_weight / total,
             'rf': rf_weight / total,
-            'lstm': lstm_weight / total
+            'logistic': logistic_weight / total
         }
         print(f"✓ Ensemble weights set: {self.weights}")
+        print(f"  CatBoost: {catboost_weight/total:.1%}, RF: {rf_weight/total:.1%}, Logistic: {logistic_weight/total:.1%}")
     
-    def predict_proba(self, X_regular, X_lstm):
+    def predict_proba(self, X_regular):
         """
         Get ensemble prediction probabilities
         
         Args:
-            X_regular: Features for CatBoost and Random Forest
-            X_lstm: Sequences for LSTM
+            X_regular: Features for CatBoost, Random Forest, and Logistic Regression
             
         Returns:
             Weighted average probabilities
@@ -376,45 +263,33 @@ class EnsembleModel:
         if self.weights is None:
             self.set_weights()
         
-        predictions = []
-        weights_sum = 0
+        # Get predictions from each model
+        catboost_proba = self.catboost.predict_proba(X_regular)
+        rf_proba = self.random_forest.predict_proba(X_regular)
+        logistic_proba = self.logistic.predict_proba(X_regular)
         
-        # Get predictions from available models
-        if self.catboost.model is not None:
-            catboost_proba = self.catboost.predict_proba(X_regular)
-            predictions.append(self.weights['catboost'] * catboost_proba)
-            weights_sum += self.weights['catboost']
-        
-        if self.random_forest.model is not None:
-            rf_proba = self.random_forest.predict_proba(X_regular)
-            predictions.append(self.weights['rf'] * rf_proba)
-            weights_sum += self.weights['rf']
-        
-        if self.lstm.model is not None:
-            lstm_proba = self.lstm.predict_proba(X_lstm)
-            predictions.append(self.weights['lstm'] * lstm_proba)
-            weights_sum += self.weights['lstm']
-        
-        if not predictions:
-            raise ValueError("No models available for prediction")
-        
-        # Normalize weights and combine predictions
-        ensemble_proba = sum(predictions) / weights_sum if weights_sum > 0 else sum(predictions) / len(predictions)
+        # Weighted average of 3 models
+        ensemble_proba = (
+            self.weights['catboost'] * catboost_proba +
+            self.weights['rf'] * rf_proba +
+            self.weights['logistic'] * logistic_proba
+        )
         
         return ensemble_proba
     
-    def predict(self, X_regular, X_lstm):
+    def predict(self, X_regular):
         """Get ensemble predictions"""
-        proba = self.predict_proba(X_regular, X_lstm)
+        proba = self.predict_proba(X_regular)
         return np.argmax(proba, axis=1)
     
     def save(self, save_dir):
         """Save all models"""
         os.makedirs(save_dir, exist_ok=True)
         
+        # Save individual models
         self.catboost.save(os.path.join(save_dir, 'catboost_model.cbm'))
         self.random_forest.save(os.path.join(save_dir, 'random_forest_model.pkl'))
-        self.lstm.save(os.path.join(save_dir, 'lstm_model.h5'))
+        self.logistic.save(os.path.join(save_dir, 'logistic_model.pkl'))
         
         # Save weights
         with open(os.path.join(save_dir, 'ensemble_weights.json'), 'w') as f:
@@ -424,40 +299,13 @@ class EnsembleModel:
     
     def load(self, save_dir):
         """Load all models"""
-        models_loaded = []
+        self.catboost.load(os.path.join(save_dir, 'catboost_model.cbm'))
+        self.random_forest.load(os.path.join(save_dir, 'random_forest_model.pkl'))
+        self.logistic.load(os.path.join(save_dir, 'logistic_model.pkl'))
         
-        try:
-            self.catboost.load(os.path.join(save_dir, 'catboost_model.cbm'))
-            models_loaded.append('CatBoost')
-        except Exception as e:
-            print(f"⚠ Failed to load CatBoost: {e}")
-        
-        try:
-            self.random_forest.load(os.path.join(save_dir, 'random_forest_model.pkl'))
-            models_loaded.append('Random Forest')
-        except Exception as e:
-            print(f"⚠ Failed to load Random Forest: {e}")
-        
-        try:
-            self.lstm.load(os.path.join(save_dir, 'lstm_model.h5'))
-            models_loaded.append('LSTM')
-        except Exception as e:
-            print(f"⚠ Failed to load LSTM: {e}")
-            self.lstm.model = None
-        
-        # Load weights and adjust for missing models
-        try:
-            with open(os.path.join(save_dir, 'ensemble_weights.json'), 'r') as f:
-                self.weights = json.load(f)
-        except Exception as e:
-            print(f"⚠ Failed to load ensemble weights: {e}")
-            # Set default weights based on available models
-            if len(models_loaded) == 3:
-                self.set_weights(0.4, 0.3, 0.3)
-            elif len(models_loaded) == 2:
-                self.set_weights(0.5, 0.5, 0.0)
-            else:
-                self.set_weights(1.0, 0.0, 0.0)
+        # Load weights
+        with open(os.path.join(save_dir, 'ensemble_weights.json'), 'r') as f:
+            self.weights = json.load(f)
         
         print(f"✓ Ensemble models loaded from {save_dir}")
-        print(f"  Available models: {', '.join(models_loaded)}")
+        print(f"  Weights: {self.weights}")

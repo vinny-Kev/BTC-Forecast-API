@@ -1,0 +1,13 @@
+{
+  "symbol": "BTCUSDT",
+  "interval": "1m",
+  "n_features": 70,
+  "n_classes": 3,
+  "sequence_length": 30,
+  "training_date": "20251006_151832",
+  "class_weights": {
+    "0": 0.33879618593563765,
+    "1": 37.9,
+    "2": 45.48
+  }
+}
