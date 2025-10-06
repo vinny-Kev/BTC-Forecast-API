@@ -68,6 +68,8 @@ class PredictionResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Health check response"""
+    model_config = {"protected_namespaces": ()}  # Allow 'model_' prefix
+    
     status: str
     model_loaded: bool
     timestamp: str

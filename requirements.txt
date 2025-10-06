@@ -3,7 +3,7 @@ uvicorn==0.24.0
 python-binance==1.0.19
 pandas==2.2.0
 numpy==1.26.3
-scikit-learn==1.4.0
+scikit-learn==1.7.2
 catboost==1.2.3
 # tensorflow removed - no LSTM needed
 ta==0.11.0
