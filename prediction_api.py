@@ -133,7 +133,7 @@ def get_latest_model_dir(base_dir='data/models'):
 async def startup_event():
     """Load models on startup"""
     # Try to load the latest model (look in parent directory's data/models)
-    model_dir = get_latest_model_dir('../data/models')
+    model_dir = get_latest_model_dir('./data/models')
     
     if model_dir:
         try:
@@ -288,7 +288,7 @@ async def model_info():
 @app.post("/model/reload")
 async def reload_models():
     """Reload models from latest directory"""
-    model_dir = get_latest_model_dir('../data/models')
+    model_dir = get_latest_model_dir('./data/models')
     
     if not model_dir:
         raise HTTPException(
