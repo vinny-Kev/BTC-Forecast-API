@@ -360,7 +360,7 @@ async def predict(
         from data_scraper import DataScraper
         
         # Fetch live data
-        scraper = DataScraper(symbol=request.symbol, interval=request.interval)
+        scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
         
         # Get enough historical data for feature engineering
         lookback = "6 hours ago UTC"  # Should be enough for all features
@@ -430,7 +430,7 @@ async def predict(
             })
         
         return PredictionResponse(
-            symbol=request.symbol,
+            symbol=prediction_request.symbol,
             timestamp=datetime.now().isoformat(),
             prediction=prediction,
             prediction_label=prediction_label,
