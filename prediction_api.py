@@ -248,12 +248,15 @@ async def predict(request: PredictionRequest):
         # Scale features
         X_scaled = preprocessor.transform(X)
         
+        # Convert back to DataFrame to use .tail() method
+        X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
+        
         # Prepare for prediction
         # For regular models (CatBoost, RF): use latest data point
-        X_regular = X_scaled.tail(1)
+        X_regular = X_scaled_df.tail(1).values
         
         # For LSTM: prepare sequence
-        X_lstm_seq = X_scaled.tail(sequence_length).values
+        X_lstm_seq = X_scaled_df.tail(sequence_length).values
         X_lstm = np.array([X_lstm_seq])  # Add batch dimension
         
         # Get ensemble predictions
@@ -327,11 +330,30 @@ async def model_info():
             detail="Models not loaded"
         )
     
+    # Extract performance metrics
+    performance = metadata.get('performance', {})
+    train_perf = performance.get('train', {})
+    test_perf = performance.get('test', {})
+    
     return {
         "metadata": metadata,
         "feature_count": len(feature_columns) if feature_columns else 0,
+        "n_features": metadata.get('n_features', len(feature_columns) if feature_columns else 0),
         "sequence_length": sequence_length,
-        "model_loaded": ensemble_model is not None
+        "model_loaded": ensemble_model is not None,
+        "symbol": metadata.get('symbol', 'N/A'),
+        "interval": metadata.get('interval', 'N/A'),
+        "training_date": metadata.get('training_date', 'N/A'),
+        "performance": {
+            "train_accuracy": train_perf.get('accuracy', 0),
+            "test_accuracy": test_perf.get('accuracy', 0),
+            "train_f1": train_perf.get('f1_macro', 0),
+            "test_f1": test_perf.get('f1_macro', 0),
+            "train_roc_auc": train_perf.get('roc_auc_ovr', 0),
+            "test_roc_auc": test_perf.get('roc_auc_ovr', 0)
+        },
+        "train_samples": metadata.get('train_samples', 'N/A'),
+        "test_samples": metadata.get('test_samples', 'N/A')
     }
 
 
