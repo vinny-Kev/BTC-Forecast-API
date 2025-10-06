@@ -9,10 +9,10 @@ __pycache__/
 env/
 venv/
 
-# Model files (too large for git)
-*.h5
-*.cbm
-*.pkl
+# Model files are now tracked with Git LFS
+# *.h5
+# *.cbm  
+# *.pkl
 
 # Jupyter
 .ipynb_checkpoints
