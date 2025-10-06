@@ -9,6 +9,9 @@ __pycache__/
 env/
 venv/
 
+# API Keys and usage data (sensitive)
+api_keys.json
+
 # Model files are now tracked with Git LFS
 # *.h5
 # *.cbm  

@@ -3,16 +3,21 @@ Prediction API
 FastAPI service for serving ML model predictions
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
 import joblib
 import os
 import sys
-from typing import List, Dict, Optional
-from datetime import datetime
+from typing import List, Dict, Optional, Annotated
+from datetime import datetime, timedelta
+import secrets
+import json
+from collections import defaultdict
+import time
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +49,124 @@ feature_engineer = None
 feature_columns = None
 metadata = None
 sequence_length = 30
+
+# API Key storage (in production, use a database)
+API_KEYS_FILE = 'api_keys.json'
+api_keys_db = {}
+rate_limit_tracker = defaultdict(list)  # {api_key: [timestamp1, timestamp2, ...]}
+guest_usage_tracker = defaultdict(int)  # {ip_address: call_count}
+
+# Rate limiting configuration
+RATE_LIMIT_CALLS = 3  # calls per window for authenticated users
+RATE_LIMIT_WINDOW = 60  # seconds (1 minute)
+GUEST_FREE_CALLS = 3  # free calls for guests (lifetime, not per minute)
+
+# Security
+security = HTTPBearer(auto_error=False)
+
+def load_api_keys():
+    """Load API keys from file"""
+    global api_keys_db, guest_usage_tracker
+    if os.path.exists(API_KEYS_FILE):
+        try:
+            with open(API_KEYS_FILE, 'r') as f:
+                data = json.load(f)
+                api_keys_db = data.get('api_keys', {})
+                guest_usage_tracker = defaultdict(int, data.get('guest_usage', {}))
+            print(f"✓ Loaded {len(api_keys_db)} API keys and {len(guest_usage_tracker)} guest records")
+        except Exception as e:
+            print(f"⚠ Error loading API keys: {e}")
+            api_keys_db = {}
+            guest_usage_tracker = defaultdict(int)
+    else:
+        api_keys_db = {}
+        guest_usage_tracker = defaultdict(int)
+        print("⚠ No API keys file found, starting fresh")
+
+def save_api_keys():
+    """Save API keys to file"""
+    try:
+        data = {
+            'api_keys': api_keys_db,
+            'guest_usage': dict(guest_usage_tracker)
+        }
+        with open(API_KEYS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"✓ Saved {len(api_keys_db)} API keys and {len(guest_usage_tracker)} guest records")
+    except Exception as e:
+        print(f"⚠ Error saving API keys: {e}")
+
+def check_rate_limit(api_key: str) -> bool:
+    """Check if API key has exceeded rate limit"""
+    now = time.time()
+    
+    # Clean old timestamps
+    rate_limit_tracker[api_key] = [
+        ts for ts in rate_limit_tracker[api_key]
+        if now - ts < RATE_LIMIT_WINDOW
+    ]
+    
+    # Check limit
+    if len(rate_limit_tracker[api_key]) >= RATE_LIMIT_CALLS:
+        return False
+    
+    # Add current timestamp
+    rate_limit_tracker[api_key].append(now)
+    return True
+
+def get_rate_limit_reset_time(api_key: str) -> int:
+    """Get seconds until rate limit resets"""
+    if not rate_limit_tracker[api_key]:
+        return 0
+    
+    oldest_call = min(rate_limit_tracker[api_key])
+    reset_time = oldest_call + RATE_LIMIT_WINDOW
+    return max(0, int(reset_time - time.time()))
+
+def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verify API key from Authorization header or allow guest access"""
+    client_ip = request.client.host
+    
+    # Check if API key is provided
+    if credentials:
+        api_key = credentials.credentials
+        
+        if api_key not in api_keys_db:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid API key"
+            )
+        
+        # Check rate limit for authenticated users
+        if not check_rate_limit(api_key):
+            reset_time = get_rate_limit_reset_time(api_key)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. You can make {RATE_LIMIT_CALLS} predictions per minute. Try again in {reset_time} seconds.",
+                headers={"Retry-After": str(reset_time)}
+            )
+        
+        return {"type": "authenticated", "data": api_keys_db[api_key], "key": api_key}
+    
+    # Guest user - check if they have free calls remaining
+    else:
+        if guest_usage_tracker[client_ip] >= GUEST_FREE_CALLS:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free trial limit reached ({GUEST_FREE_CALLS} predictions). Please contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key to continue using the service."
+            )
+        
+        # Increment guest usage
+        guest_usage_tracker[client_ip] += 1
+        save_api_keys()  # Persist guest usage
+        
+        remaining = GUEST_FREE_CALLS - guest_usage_tracker[client_ip]
+        return {
+            "type": "guest",
+            "ip": client_ip,
+            "calls_used": guest_usage_tracker[client_ip],
+            "calls_remaining": remaining
+        }
 
 
 class PredictionRequest(BaseModel):
@@ -164,6 +287,9 @@ async def startup_event():
     print(f"Current working directory: {os.getcwd()}")
     print(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
     
+    # Load API keys
+    load_api_keys()
+    
     # Try to load the latest model
     model_dir = get_latest_model_dir()
     
@@ -206,9 +332,16 @@ async def health():
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(request: PredictionRequest):
+async def predict(
+    request: Request,
+    prediction_request: PredictionRequest,
+    auth_data: dict = Depends(verify_api_key)
+):
     """
     Get price movement predictions
+    
+    Free Trial: 3 predictions per IP address (no API key needed)
+    With API Key: 3 predictions per minute
     
     Returns:
     - prediction: 0 (no movement), 1 (large up), 2 (large down)
@@ -379,6 +512,104 @@ async def reload_models():
             status_code=500,
             detail=f"Failed to reload models: {str(e)}"
         )
+
+
+# ========== API Key Management Endpoints ==========
+
+@app.post("/api-keys/generate")
+async def generate_api_key(
+    name: str,
+    email: str,
+    admin_secret: str = Header(..., alias="X-Admin-Secret")
+):
+    """
+    Generate a new API key (Admin only)
+    
+    Requires X-Admin-Secret header for security
+    """
+    # Simple admin check (in production, use proper auth)
+    ADMIN_SECRET = os.getenv("ADMIN_SECRET", "change_this_secret_key")
+    
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    # Generate unique API key
+    api_key = f"btc_{secrets.token_urlsafe(32)}"
+    
+    # Store API key
+    api_keys_db[api_key] = {
+        "name": name,
+        "email": email,
+        "created_at": datetime.now().isoformat(),
+        "calls_made": 0
+    }
+    
+    save_api_keys()
+    
+    return {
+        "success": True,
+        "api_key": api_key,
+        "name": name,
+        "email": email,
+        "rate_limit": f"{RATE_LIMIT_CALLS} predictions per minute",
+        "usage": f"Include header: Authorization: Bearer {api_key}"
+    }
+
+
+@app.get("/api-keys/usage")
+async def get_usage(request: Request, auth_data: dict = Depends(verify_api_key)):
+    """Get current usage information"""
+    
+    if auth_data["type"] == "guest":
+        return {
+            "user_type": "guest",
+            "ip_address": auth_data["ip"],
+            "calls_used": auth_data["calls_used"],
+            "calls_remaining": auth_data["calls_remaining"],
+            "message": f"You have {auth_data['calls_remaining']} free predictions remaining. Contact Kevin Maglaqui for an API key."
+        }
+    else:
+        api_key = auth_data["key"]
+        key_data = auth_data["data"]
+        
+        # Count recent calls
+        now = time.time()
+        recent_calls = [
+            ts for ts in rate_limit_tracker[api_key]
+            if now - ts < RATE_LIMIT_WINDOW
+        ]
+        
+        return {
+            "user_type": "authenticated",
+            "name": key_data.get("name", "Unknown"),
+            "email": key_data.get("email", "Unknown"),
+            "rate_limit": f"{RATE_LIMIT_CALLS} predictions per minute",
+            "calls_in_last_minute": len(recent_calls),
+            "calls_remaining": max(0, RATE_LIMIT_CALLS - len(recent_calls))
+        }
+
+
+@app.delete("/api-keys/revoke")
+async def revoke_api_key(
+    api_key_to_revoke: str,
+    admin_secret: str = Header(..., alias="X-Admin-Secret")
+):
+    """Revoke an API key (Admin only)"""
+    ADMIN_SECRET = os.getenv("ADMIN_SECRET", "change_this_secret_key")
+    
+    if admin_secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    if api_key_to_revoke not in api_keys_db:
+        raise HTTPException(status_code=404, detail="API key not found")
+    
+    del api_keys_db[api_key_to_revoke]
+    save_api_keys()
+    
+    return {
+        "success": True,
+        "message": "API key revoked successfully"
+    }
 
 
 if __name__ == "__main__":
