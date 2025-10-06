@@ -319,7 +319,7 @@ class LSTMModel:
     
     def load(self, path):
         """Load model"""
-        self.model = keras.models.load_model(path)
+        self.model = keras.models.load_model(path, compile=False)
         print(f"✓ LSTM model loaded from {path}")
 
 
@@ -401,3 +401,5 @@ class EnsembleModel:
             self.weights = json.load(f)
         
         print(f"✓ Ensemble models loaded from {save_dir}")
+
+
