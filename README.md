@@ -65,7 +65,9 @@ Currently open for demo. Premium API keys coming soon.
 
 For API access, custom integrations, or enterprise solutions:
 **kevinroymaglaqui29@gmail.com**
+**kevinroymaglaqui.is-a.dev**
 
 ---
 
-**Built with ❤️ by Kevin Roy Maglaqui**
+**Built with ❤️ by Kevin Roy Maglaqui** << Not trying to be cringe
+**
