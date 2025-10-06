@@ -10,7 +10,6 @@ env/
 venv/
 
 # Model files (too large for git)
-data/models/
 *.h5
 *.cbm
 *.pkl
