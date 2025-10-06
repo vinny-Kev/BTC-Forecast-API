@@ -313,22 +313,14 @@ class LSTMModel:
         return self.model.predict(X, verbose=0)
     
     def save(self, path):
-        """Save model in Keras 3 compatible format"""
-        # Save with save_format='tf' for better compatibility
-        self.model.save(path, save_format='keras')
+        """Save model"""
+        self.model.save(path)
         print(f"✓ LSTM model saved to {path}")
     
     def load(self, path):
-        """Load model with compatibility handling"""
-        try:
-            # Try loading with compile=False to avoid optimizer issues
-            self.model = keras.models.load_model(path, compile=False)
-            # Recompile the model
-            self.compile()
-            print(f"✓ LSTM model loaded from {path}")
-        except Exception as e:
-            print(f"⚠ Error loading LSTM model: {e}")
-            raise
+        """Load model"""
+        self.model = keras.models.load_model(path, compile=False)
+        print(f"✓ LSTM model loaded from {path}")
 
 
 class EnsembleModel:
@@ -409,3 +401,4 @@ class EnsembleModel:
             self.weights = json.load(f)
         
         print(f"✓ Ensemble models loaded from {save_dir}")
+
