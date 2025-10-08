@@ -9,7 +9,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.0"
+        value: "3.10.14"
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_SECRET_KEY
