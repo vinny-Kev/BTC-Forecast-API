@@ -61,19 +61,18 @@ logger = logging.getLogger(__name__)
 async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
     Verify API key from Authorization header or allow guest access
-    Uses MongoDB for persistent storage, with fallback if DB is unavailable
+    Uses MongoDB for persistent storage
+    FAILS SECURE: Rejects all requests if database is unavailable
     """
     client_ip = request.client.host
     
-    # Check if MongoDB is connected
+    # Check if MongoDB is connected - FAIL SECURE
     if not db.client:
-        # MongoDB not available - allow all requests without authentication
-        logger.warning("MongoDB unavailable - allowing request without authentication")
-        return {
-            "type": "no_auth",
-            "ip": client_ip,
-            "message": "Database unavailable - no authentication required"
-        }
+        logger.error("MongoDB unavailable - rejecting request for security")
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable. Database connection required for authentication."
+        )
     
     try:
         # Check if API key is provided
@@ -130,13 +129,12 @@ async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredent
         # Re-raise HTTP exceptions (auth failures, quota exceeded)
         raise
     except Exception as e:
-        # Database error - allow the request to proceed
+        # Database error during request - FAIL SECURE
         logger.error(f"Database error in verify_api_key: {e}")
-        return {
-            "type": "db_error",
-            "ip": client_ip,
-            "message": "Database error - allowing request"
-        }
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable. Database error during authentication."
+        )
 
 
 class PredictionRequest(BaseModel):
@@ -310,13 +308,14 @@ async def startup_event():
     print(f"Current working directory: {os.getcwd()}")
     print(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
     
-    # Connect to MongoDB
+    # Connect to MongoDB - REQUIRED for security
     try:
         await db.connect()
         print("✓ MongoDB connection established")
     except Exception as e:
         print(f"⚠ MongoDB connection failed: {e}")
-        print("API will continue without database persistence")
+        print("⚠ WARNING: API will reject all requests until database is connected")
+        print("⚠ This is intentional for security - authentication requires database")
     
     # Try to load the latest model
     model_dir = get_latest_model_dir()
