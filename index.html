@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Price Prediction - V1.1</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .input-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .input-group label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .input-group input,
+        .input-group select {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus,
+        .input-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results {
+            display: none;
+        }
+
+        .results.show {
+            display: block;
+        }
+
+        .prediction-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .prediction-label {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .prediction-label.up {
+            color: #10b981;
+        }
+
+        .prediction-label.down {
+            color: #ef4444;
+        }
+
+        .prediction-label.neutral {
+            color: #f59e0b;
+        }
+
+        .confidence-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 1.1em;
+        }
+
+        .confidence-badge.high {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .confidence-badge.medium {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .confidence-badge.low {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 0.85em;
+            color: #6b7280;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #111827;
+        }
+
+        .trend-section {
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .trend-indicators {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+
+        .trend-indicator {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .trend-indicator.bullish {
+            border-left-color: #10b981;
+            background: #ecfdf5;
+        }
+
+        .trend-indicator.bearish {
+            border-left-color: #ef4444;
+            background: #fef2f2;
+        }
+
+        .trend-indicator.neutral {
+            border-left-color: #f59e0b;
+            background: #fffbeb;
+        }
+
+        .trend-indicator-label {
+            font-size: 0.85em;
+            color: #6b7280;
+            margin-bottom: 5px;
+        }
+
+        .trend-indicator-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            text-transform: capitalize;
+        }
+
+        .tags-section {
+            margin-bottom: 20px;
+        }
+
+        .tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .tag {
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: #e0e7ff;
+            color: #3730a3;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+
+        .tag.overbought {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .tag.oversold {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .tag.high_volatility {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .tag.low_volatility {
+            background: #dbeafe;
+            color: #1e3a8a;
+        }
+
+        .suggestion-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .suggestion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .suggestion-action {
+            font-size: 2em;
+            font-weight: bold;
+        }
+
+        .suggestion-conviction {
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            font-weight: 600;
+        }
+
+        .suggestion-reasoning {
+            list-style: none;
+            margin-bottom: 15px;
+        }
+
+        .suggestion-reasoning li {
+            padding: 8px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .suggestion-reasoning li:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            font-weight: bold;
+        }
+
+        .score-breakdown {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .score-item {
+            text-align: center;
+        }
+
+        .score-label {
+            font-size: 0.85em;
+            opacity: 0.9;
+            margin-bottom: 5px;
+        }
+
+        .score-value {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        .probabilities {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .probability-bar {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        .probability-label {
+            font-size: 0.85em;
+            color: #6b7280;
+            margin-bottom: 8px;
+        }
+
+        .probability-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #111827;
+            margin-bottom: 8px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            .input-section {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid,
+            .trend-indicators,
+            .probabilities {
+                grid-template-columns: 1fr;
+            }
+
+            .score-breakdown {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔮 Bitcoin Price Prediction</h1>
+            <p>Advanced AI-Powered Market Analysis V1.1</p>
+        </div>
+
+        <div class="card">
+            <div class="input-section">
+                <div class="input-group">
+                    <label for="symbol">Trading Pair</label>
+                    <input type="text" id="symbol" value="BTCUSDT" placeholder="e.g., BTCUSDT">
+                </div>
+                <div class="input-group">
+                    <label for="interval">Timeframe</label>
+                    <select id="interval">
+                        <option value="1m">1 Minute</option>
+                        <option value="5m">5 Minutes</option>
+                        <option value="15m">15 Minutes</option>
+                        <option value="1h">1 Hour</option>
+                        <option value="4h">4 Hours</option>
+                        <option value="1d">1 Day</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label for="apiKey">API Key (Optional)</label>
+                    <input type="text" id="apiKey" placeholder="btc_xxx... or leave blank">
+                </div>
+            </div>
+            
+            <button class="btn" onclick="getPrediction()">
+                Get Prediction
+            </button>
+
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Analyzing market data...</p>
+            </div>
+
+            <div class="error" id="error"></div>
+        </div>
+
+        <div class="results" id="results">
+            <div class="card">
+                <div class="prediction-header">
+                    <div class="prediction-label" id="predictionLabel">
+                        <!-- Prediction label here -->
+                    </div>
+                    <div class="confidence-badge" id="confidenceBadge">
+                        <!-- Confidence badge here -->
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Current Price</div>
+                        <div class="stat-value" id="currentPrice">$0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Symbol</div>
+                        <div class="stat-value" id="symbolDisplay">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Timestamp</div>
+                        <div class="stat-value" id="timestamp">-</div>
+                    </div>
+                </div>
+
+                <div class="suggestion-section" id="suggestionSection">
+                    <div class="suggestion-header">
+                        <div class="suggestion-action" id="suggestionAction">HOLD</div>
+                        <div class="suggestion-conviction" id="suggestionConviction">Medium</div>
+                    </div>
+                    <div style="margin-bottom: 10px;">
+                        <strong>Risk Level:</strong> <span id="riskLevel">Medium</span>
+                    </div>
+                    <ul class="suggestion-reasoning" id="suggestionReasons">
+                        <!-- Reasons will be inserted here -->
+                    </ul>
+                    <div class="score-breakdown">
+                        <div class="score-item">
+                            <div class="score-label">Confidence Boost</div>
+                            <div class="score-value" id="scoreBoost">0</div>
+                        </div>
+                        <div class="score-item">
+                            <div class="score-label">Trend Score</div>
+                            <div class="score-value" id="scoreTrend">0</div>
+                        </div>
+                        <div class="score-item">
+                            <div class="score-label">Total Score</div>
+                            <div class="score-value" id="scoreTotal">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="trend-section">
+                    <div class="section-title">
+                        📈 Trend Analysis
+                    </div>
+                    <div class="trend-indicators">
+                        <div class="trend-indicator" id="shortTermTrend">
+                            <div class="trend-indicator-label">Short Term</div>
+                            <div class="trend-indicator-value" id="shortTermValue">-</div>
+                        </div>
+                        <div class="trend-indicator" id="longTermTrend">
+                            <div class="trend-indicator-label">Long Term</div>
+                            <div class="trend-indicator-value" id="longTermValue">-</div>
+                        </div>
+                        <div class="trend-indicator">
+                            <div class="trend-indicator-label">Trend Strength</div>
+                            <div class="trend-indicator-value" id="trendStrength">-</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tags-section">
+                    <div class="section-title">
+                        🏷️ Market Conditions
+                    </div>
+                    <div class="tags-container" id="tagsContainer">
+                        <!-- Tags will be inserted here -->
+                    </div>
+                </div>
+
+                <div class="section-title">
+                    📊 Model Probabilities
+                </div>
+                <div class="probabilities">
+                    <div class="probability-bar">
+                        <div class="probability-label">No Movement</div>
+                        <div class="probability-value" id="probNoMovement">0%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="barNoMovement" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="probability-bar">
+                        <div class="probability-label">Large Upward</div>
+                        <div class="probability-value" id="probLargeUp">0%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="barLargeUp" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="probability-bar">
+                        <div class="probability-label">Large Downward</div>
+                        <div class="probability-value" id="probLargeDown">0%</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="barLargeDown" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function getPrediction() {
+            const symbol = document.getElementById('symbol').value;
+            const interval = document.getElementById('interval').value;
+            const apiKey = document.getElementById('apiKey').value.trim();
+
+            // Show loading, hide results and errors
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('results').classList.remove('show');
+            document.getElementById('error').classList.remove('show');
+
+            // Prepare request
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+
+            if (apiKey) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+
+            try {
+                const response = await fetch('http://localhost:8000/v1.1/predict', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        symbol: symbol,
+                        interval: interval
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Prediction failed');
+                }
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+                document.getElementById('error').classList.add('show');
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        function displayResults(data) {
+            // Prediction header
+            const predictionLabel = document.getElementById('predictionLabel');
+            predictionLabel.textContent = data.prediction_label;
+            predictionLabel.className = 'prediction-label';
+            if (data.prediction === 1) predictionLabel.classList.add('up');
+            else if (data.prediction === 2) predictionLabel.classList.add('down');
+            else predictionLabel.classList.add('neutral');
+
+            // Confidence badge
+            const confidence = data.confidence * 100;
+            const confidenceBadge = document.getElementById('confidenceBadge');
+            confidenceBadge.textContent = `${confidence.toFixed(1)}% Confidence`;
+            confidenceBadge.className = 'confidence-badge';
+            if (confidence >= 75) confidenceBadge.classList.add('high');
+            else if (confidence >= 50) confidenceBadge.classList.add('medium');
+            else confidenceBadge.classList.add('low');
+
+            // Stats
+            document.getElementById('currentPrice').textContent = `$${data.current_price.toLocaleString()}`;
+            document.getElementById('symbolDisplay').textContent = data.symbol;
+            document.getElementById('timestamp').textContent = new Date(data.timestamp).toLocaleTimeString();
+
+            // Suggestion section
+            document.getElementById('suggestionAction').textContent = data.suggestion.action;
+            document.getElementById('suggestionConviction').textContent = data.suggestion.conviction.toUpperCase();
+            document.getElementById('riskLevel').textContent = data.suggestion.risk_level.toUpperCase();
+
+            const reasonsList = document.getElementById('suggestionReasons');
+            reasonsList.innerHTML = '';
+            data.suggestion.reasoning.forEach(reason => {
+                const li = document.createElement('li');
+                li.textContent = reason;
+                reasonsList.appendChild(li);
+            });
+
+            document.getElementById('scoreBoost').textContent = data.suggestion.score_breakdown.confidence_boost;
+            document.getElementById('scoreTrend').textContent = data.suggestion.score_breakdown.trend_score;
+            document.getElementById('scoreTotal').textContent = data.suggestion.score_breakdown.total_score;
+
+            // Trend indicators
+            const shortTerm = document.getElementById('shortTermTrend');
+            shortTerm.className = 'trend-indicator ' + data.trend.short_term;
+            document.getElementById('shortTermValue').textContent = data.trend.short_term;
+
+            const longTerm = document.getElementById('longTermTrend');
+            longTerm.className = 'trend-indicator ' + data.trend.long_term;
+            document.getElementById('longTermValue').textContent = data.trend.long_term;
+
+            document.getElementById('trendStrength').textContent = (data.trend.strength * 100).toFixed(0) + '%';
+
+            // Tags
+            const tagsContainer = document.getElementById('tagsContainer');
+            tagsContainer.innerHTML = '';
+            data.tags.forEach(tag => {
+                const tagEl = document.createElement('div');
+                tagEl.className = 'tag ' + tag.toLowerCase().replace(/ /g, '_');
+                tagEl.textContent = tag.replace(/_/g, ' ').toUpperCase();
+                tagsContainer.appendChild(tagEl);
+            });
+
+            // Probabilities
+            const probabilities = data.probabilities;
+            
+            document.getElementById('probNoMovement').textContent = `${(probabilities.no_movement * 100).toFixed(1)}%`;
+            document.getElementById('barNoMovement').style.width = `${probabilities.no_movement * 100}%`;
+            
+            document.getElementById('probLargeUp').textContent = `${(probabilities.large_up * 100).toFixed(1)}%`;
+            document.getElementById('barLargeUp').style.width = `${probabilities.large_up * 100}%`;
+            
+            document.getElementById('probLargeDown').textContent = `${(probabilities.large_down * 100).toFixed(1)}%`;
+            document.getElementById('barLargeDown').style.width = `${probabilities.large_down * 100}%`;
+
+            // Show results
+            document.getElementById('results').classList.add('show');
+        }
+    </script>
+</body>
+</html>

@@ -193,7 +193,7 @@ class TrendInfo(BaseModel):
     """Trend direction and strength"""
     short_term: str = Field(..., description="Short-term trend: bullish/bearish/neutral")
     long_term: str = Field(..., description="Long-term trend: bullish/bearish/neutral")
-    strength: str = Field(..., description="Trend strength: weak/moderate/strong")
+    strength: float = Field(..., description="Trend strength from 0.0 to 1.0", ge=0.0, le=1.0)
 
 
 class ScoreBreakdown(BaseModel):
