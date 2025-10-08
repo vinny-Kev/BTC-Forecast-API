@@ -22,15 +22,16 @@ import time
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Import modules - defer DataScraper initialization
+# Import modules
 from feature_engineering import FeatureEngineer
 from models import EnsembleModel
+from database import db  # MongoDB database instance
 
 # Initialize FastAPI
 app = FastAPI(
     title="Crypto Price Movement Forecasting API",
-    description="ML ensemble for predicting large crypto price movements",
-    version="1.0.0"
+    description="ML ensemble for predicting large crypto price movements with MongoDB backend",
+    version="1.1.0"
 )
 
 # CORS middleware
@@ -50,123 +51,69 @@ feature_columns = None
 metadata = None
 sequence_length = 30
 
-# API Key storage (in production, use a database)
-API_KEYS_FILE = 'api_keys.json'
-api_keys_db = {}
-rate_limit_tracker = defaultdict(list)  # {api_key: [timestamp1, timestamp2, ...]}
-guest_usage_tracker = defaultdict(int)  # {ip_address: call_count}
-
-# Rate limiting configuration
-RATE_LIMIT_CALLS = 3  # calls per window for authenticated users
-RATE_LIMIT_WINDOW = 60  # seconds (1 minute)
-GUEST_FREE_CALLS = 3  # free calls for guests (lifetime, not per minute)
-
 # Security
 security = HTTPBearer(auto_error=False)
 
-def load_api_keys():
-    """Load API keys from file"""
-    global api_keys_db, guest_usage_tracker
-    if os.path.exists(API_KEYS_FILE):
-        try:
-            with open(API_KEYS_FILE, 'r') as f:
-                data = json.load(f)
-                api_keys_db = data.get('api_keys', {})
-                guest_usage_tracker = defaultdict(int, data.get('guest_usage', {}))
-            print(f"✓ Loaded {len(api_keys_db)} API keys and {len(guest_usage_tracker)} guest records")
-        except Exception as e:
-            print(f"⚠ Error loading API keys: {e}")
-            api_keys_db = {}
-            guest_usage_tracker = defaultdict(int)
-    else:
-        api_keys_db = {}
-        guest_usage_tracker = defaultdict(int)
-        print("⚠ No API keys file found, starting fresh")
+# Logger
+import logging
+logger = logging.getLogger(__name__)
 
-def save_api_keys():
-    """Save API keys to file"""
-    try:
-        data = {
-            'api_keys': api_keys_db,
-            'guest_usage': dict(guest_usage_tracker)
-        }
-        with open(API_KEYS_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-        print(f"✓ Saved {len(api_keys_db)} API keys and {len(guest_usage_tracker)} guest records")
-    except Exception as e:
-        print(f"⚠ Error saving API keys: {e}")
-
-def check_rate_limit(api_key: str) -> bool:
-    """Check if API key has exceeded rate limit"""
-    now = time.time()
-    
-    # Clean old timestamps
-    rate_limit_tracker[api_key] = [
-        ts for ts in rate_limit_tracker[api_key]
-        if now - ts < RATE_LIMIT_WINDOW
-    ]
-    
-    # Check limit
-    if len(rate_limit_tracker[api_key]) >= RATE_LIMIT_CALLS:
-        return False
-    
-    # Add current timestamp
-    rate_limit_tracker[api_key].append(now)
-    return True
-
-def get_rate_limit_reset_time(api_key: str) -> int:
-    """Get seconds until rate limit resets"""
-    if not rate_limit_tracker[api_key]:
-        return 0
-    
-    oldest_call = min(rate_limit_tracker[api_key])
-    reset_time = oldest_call + RATE_LIMIT_WINDOW
-    return max(0, int(reset_time - time.time()))
-
-def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify API key from Authorization header or allow guest access"""
+async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Verify API key from Authorization header or allow guest access
+    Uses MongoDB for persistent storage
+    """
     client_ip = request.client.host
     
     # Check if API key is provided
     if credentials:
         api_key = credentials.credentials
         
-        if api_key not in api_keys_db:
+        # Verify API key with database
+        user = await db.get_user_by_api_key(api_key)
+        
+        if not user:
             raise HTTPException(
                 status_code=401,
                 detail="Invalid API key"
             )
         
-        # Check rate limit for authenticated users
-        if not check_rate_limit(api_key):
-            reset_time = get_rate_limit_reset_time(api_key)
+        # Check and increment user's quota
+        can_proceed = await db.increment_user_requests(user["_id"])
+        
+        if not can_proceed:
+            usage = await db.get_user_usage(user["_id"])
             raise HTTPException(
                 status_code=429,
-                detail=f"Rate limit exceeded. You can make {RATE_LIMIT_CALLS} predictions per minute. Try again in {reset_time} seconds.",
-                headers={"Retry-After": str(reset_time)}
+                detail=f"Daily quota exceeded. Limit: {usage['quota_limit']} requests per day. Resets daily.",
+                headers={"Retry-After": "86400"}  # 24 hours
             )
         
-        return {"type": "authenticated", "data": api_keys_db[api_key], "key": api_key}
-    
-    # Guest user - check if they have free calls remaining
-    else:
-        if guest_usage_tracker[client_ip] >= GUEST_FREE_CALLS:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Free trial limit reached ({GUEST_FREE_CALLS} predictions). Please contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key to continue using the service."
-            )
-        
-        # Increment guest usage
-        guest_usage_tracker[client_ip] += 1
-        save_api_keys()  # Persist guest usage
-        
-        remaining = GUEST_FREE_CALLS - guest_usage_tracker[client_ip]
         return {
-            "type": "guest",
-            "ip": client_ip,
-            "calls_used": guest_usage_tracker[client_ip],
-            "calls_remaining": remaining
+            "type": "authenticated",
+            "user_id": user["_id"],
+            "email": user["email"],
+            "name": user["name"]
         }
+    
+    # Guest access (3 free calls total, persisted in database)
+    guest_usage = await db.get_guest_usage(client_ip)
+    
+    if guest_usage["calls_used"] >= guest_usage["calls_limit"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Free trial expired. You've used all {guest_usage['calls_limit']} free predictions. Contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key."
+        )
+    
+    # Increment guest usage
+    await db.increment_guest_usage(client_ip)
+    
+    return {
+        "type": "guest",
+        "ip": client_ip,
+        "calls_used": guest_usage["calls_used"] + 1,
+        "calls_remaining": guest_usage["calls_limit"] - guest_usage["calls_used"] - 1
+    }
 
 
 class PredictionRequest(BaseModel):
@@ -262,10 +209,18 @@ def load_models(model_dir: str):
     # Load preprocessor
     preprocessor_path = os.path.join(model_dir, 'preprocessor.pkl')
     if os.path.exists(preprocessor_path):
-        preprocessor = joblib.load(preprocessor_path)
-        print(f"✓ Preprocessor loaded")
+        try:
+            preprocessor = joblib.load(preprocessor_path)
+            print(f"✓ Preprocessor loaded")
+        except Exception as e:
+            print(f"⚠ Could not load saved preprocessor: {e}")
+            print("  Using StandardScaler instead")
+            from sklearn.preprocessing import StandardScaler
+            preprocessor = StandardScaler()
     else:
-        raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
+        print("⚠ Preprocessor not found, using StandardScaler")
+        from sklearn.preprocessing import StandardScaler
+        preprocessor = StandardScaler()
     
     # Load feature columns
     feature_cols_path = os.path.join(model_dir, 'feature_columns.pkl')
@@ -325,15 +280,20 @@ def get_latest_model_dir(base_dir='data/models'):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load models on startup"""
+    """Load models and connect to MongoDB on startup"""
     global ensemble_model
     
     print(f"Starting up API...")
     print(f"Current working directory: {os.getcwd()}")
     print(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
     
-    # Load API keys
-    load_api_keys()
+    # Connect to MongoDB
+    try:
+        await db.connect()
+        print("✓ MongoDB connection established")
+    except Exception as e:
+        print(f"⚠ MongoDB connection failed: {e}")
+        print("API will continue without database persistence")
     
     # Try to load the latest model
     model_dir = get_latest_model_dir()
@@ -354,6 +314,13 @@ async def startup_event():
         print(f"  - {os.path.join(os.path.dirname(__file__), 'data', 'models')}")
         print("Please train models first using the training pipeline.")
         ensemble_model = None
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Disconnect from MongoDB on shutdown"""
+    await db.disconnect()
+    print("✓ Disconnected from MongoDB")
 
 
 @app.get("/", response_model=HealthResponse)
@@ -850,26 +817,16 @@ async def generate_api_key(
     if admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
     
-    # Generate unique API key
-    api_key = f"btc_{secrets.token_urlsafe(32)}"
-    
-    # Store API key
-    api_keys_db[api_key] = {
-        "name": name,
-        "email": email,
-        "created_at": datetime.now().isoformat(),
-        "calls_made": 0
-    }
-    
-    save_api_keys()
+    # Create user in database (generates API key automatically)
+    user = await db.create_user(email=email, name=name, quota_limit=1000)
     
     return {
         "success": True,
-        "api_key": api_key,
+        "api_key": user["api_key"],
         "name": name,
         "email": email,
-        "rate_limit": f"{RATE_LIMIT_CALLS} predictions per minute",
-        "usage": f"Include header: Authorization: Bearer {api_key}"
+        "quota_limit": "1000 predictions per day",
+        "usage": f"Include header: Authorization: Bearer {user['api_key']}"
     }
 
 
@@ -886,46 +843,45 @@ async def get_usage(request: Request, auth_data: dict = Depends(verify_api_key))
             "message": f"You have {auth_data['calls_remaining']} free predictions remaining. Contact Kevin Maglaqui for an API key."
         }
     else:
-        api_key = auth_data["key"]
-        key_data = auth_data["data"]
-        
-        # Count recent calls
-        now = time.time()
-        recent_calls = [
-            ts for ts in rate_limit_tracker[api_key]
-            if now - ts < RATE_LIMIT_WINDOW
-        ]
+        # Get user usage from database
+        usage = await db.get_user_usage(auth_data["user_id"])
         
         return {
             "user_type": "authenticated",
-            "name": key_data.get("name", "Unknown"),
-            "email": key_data.get("email", "Unknown"),
-            "rate_limit": f"{RATE_LIMIT_CALLS} predictions per minute",
-            "calls_in_last_minute": len(recent_calls),
-            "calls_remaining": max(0, RATE_LIMIT_CALLS - len(recent_calls))
+            "name": auth_data["name"],
+            "email": auth_data["email"],
+            "quota_limit": f"{usage['quota_limit']} predictions per day",
+            "requests_today": usage["requests_today"],
+            "requests_remaining": usage["requests_remaining"]
         }
 
 
 @app.delete("/api-keys/revoke")
 async def revoke_api_key(
-    api_key_to_revoke: str,
+    email: str,
     admin_secret: str = Header(..., alias="X-Admin-Secret")
 ):
-    """Revoke an API key (Admin only)"""
+    """Revoke an API key by email (Admin only)"""
     ADMIN_SECRET = os.getenv("ADMIN_SECRET", "change_this_secret_key")
     
     if admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
     
-    if api_key_to_revoke not in api_keys_db:
-        raise HTTPException(status_code=404, detail="API key not found")
+    # Find user by email
+    user = await db.get_user_by_email(email)
     
-    del api_keys_db[api_key_to_revoke]
-    save_api_keys()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Revoke the API key
+    success = await db.revoke_api_key(user["_id"])
+    
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to revoke API key")
     
     return {
         "success": True,
-        "message": "API key revoked successfully"
+        "message": f"API key for {email} revoked successfully"
     }
 
 
