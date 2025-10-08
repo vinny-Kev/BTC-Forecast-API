@@ -261,8 +261,14 @@ class EnsembleModel:
         # Load logistic model if exists
         logistic_path = os.path.join(save_dir, 'logistic_model.pkl')
         if os.path.exists(logistic_path):
-            self.logistic = joblib.load(logistic_path)
-            print(f"✓ Logistic Regression model loaded from {logistic_path}")
+            loaded = joblib.load(logistic_path)
+            # Handle both dict format (with 'model' key) and direct model format
+            if isinstance(loaded, dict) and 'model' in loaded:
+                self.logistic = loaded['model']
+                print(f"✓ Logistic Regression model loaded from {logistic_path} (dict format)")
+            else:
+                self.logistic = loaded
+                print(f"✓ Logistic Regression model loaded from {logistic_path}")
         else:
             print("⚠ No logistic model found, using 2-model ensemble")
         
