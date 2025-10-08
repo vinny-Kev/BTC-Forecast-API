@@ -61,59 +61,82 @@ logger = logging.getLogger(__name__)
 async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
     Verify API key from Authorization header or allow guest access
-    Uses MongoDB for persistent storage
+    Uses MongoDB for persistent storage, with fallback if DB is unavailable
     """
     client_ip = request.client.host
     
-    # Check if API key is provided
-    if credentials:
-        api_key = credentials.credentials
-        
-        # Verify API key with database
-        user = await db.get_user_by_api_key(api_key)
-        
-        if not user:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid API key"
-            )
-        
-        # Check and increment user's quota
-        can_proceed = await db.increment_user_requests(user["_id"])
-        
-        if not can_proceed:
-            usage = await db.get_user_usage(user["_id"])
-            raise HTTPException(
-                status_code=429,
-                detail=f"Daily quota exceeded. Limit: {usage['quota_limit']} requests per day. Resets daily.",
-                headers={"Retry-After": "86400"}  # 24 hours
-            )
-        
+    # Check if MongoDB is connected
+    if not db.client:
+        # MongoDB not available - allow all requests without authentication
+        logger.warning("MongoDB unavailable - allowing request without authentication")
         return {
-            "type": "authenticated",
-            "user_id": user["_id"],
-            "email": user["email"],
-            "name": user["name"]
+            "type": "no_auth",
+            "ip": client_ip,
+            "message": "Database unavailable - no authentication required"
         }
     
-    # Guest access (3 free calls total, persisted in database)
-    guest_usage = await db.get_guest_usage(client_ip)
+    try:
+        # Check if API key is provided
+        if credentials:
+            api_key = credentials.credentials
+            
+            # Verify API key with database
+            user = await db.get_user_by_api_key(api_key)
+            
+            if not user:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid API key"
+                )
+            
+            # Check and increment user's quota
+            can_proceed = await db.increment_user_requests(user["_id"])
+            
+            if not can_proceed:
+                usage = await db.get_user_usage(user["_id"])
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Daily quota exceeded. Limit: {usage['quota_limit']} requests per day. Resets daily.",
+                    headers={"Retry-After": "86400"}  # 24 hours
+                )
+            
+            return {
+                "type": "authenticated",
+                "user_id": user["_id"],
+                "email": user["email"],
+                "name": user["name"]
+            }
+        
+        # Guest access (3 free calls total, persisted in database)
+        guest_usage = await db.get_guest_usage(client_ip)
+        
+        if guest_usage["calls_used"] >= guest_usage["calls_limit"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free trial expired. You've used all {guest_usage['calls_limit']} free predictions. Contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key."
+            )
+        
+        # Increment guest usage
+        await db.increment_guest_usage(client_ip)
+        
+        return {
+            "type": "guest",
+            "ip": client_ip,
+            "calls_used": guest_usage["calls_used"] + 1,
+            "calls_remaining": guest_usage["calls_limit"] - guest_usage["calls_used"] - 1
+        }
     
-    if guest_usage["calls_used"] >= guest_usage["calls_limit"]:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Free trial expired. You've used all {guest_usage['calls_limit']} free predictions. Contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key."
-        )
-    
-    # Increment guest usage
-    await db.increment_guest_usage(client_ip)
-    
-    return {
-        "type": "guest",
-        "ip": client_ip,
-        "calls_used": guest_usage["calls_used"] + 1,
-        "calls_remaining": guest_usage["calls_limit"] - guest_usage["calls_used"] - 1
-    }
+    except HTTPException:
+        # Re-raise HTTP exceptions (auth failures, quota exceeded)
+        raise
+    except Exception as e:
+        # Database error - allow the request to proceed
+        logger.error(f"Database error in verify_api_key: {e}")
+        return {
+            "type": "db_error",
+            "ip": client_ip,
+            "message": "Database error - allowing request"
+        }
 
 
 class PredictionRequest(BaseModel):
