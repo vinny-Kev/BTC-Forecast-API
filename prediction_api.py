@@ -768,6 +768,17 @@ async def model_info():
     train_perf = performance.get('train', {})
     test_perf = performance.get('test', {})
     
+    # Determine model architecture
+    use_stacking = metadata.get('use_stacking', False)
+    has_meta_learner = metadata.get('has_meta_learner', False)
+    
+    if use_stacking and has_meta_learner:
+        model_type = "Stacked Ensemble: (CatBoost + Random Forest + Logistic) → Meta-Learner"
+        ensemble_description = "Base models generate predictions, meta-learner combines them for final output"
+    else:
+        model_type = "Weighted Ensemble (CatBoost + Random Forest + Logistic Regression)"
+        ensemble_description = "Weighted average of base model predictions"
+    
     return {
         "metadata": metadata,
         "feature_count": len(feature_columns) if feature_columns else 0,
@@ -777,7 +788,11 @@ async def model_info():
         "symbol": metadata.get('symbol', 'N/A'),
         "interval": metadata.get('interval', 'N/A'),
         "training_date": metadata.get('training_date', 'N/A'),
-        "model_type": "3-Model Ensemble (CatBoost + Random Forest + Logistic Regression)",
+        "model_type": model_type,
+        "model_architecture": metadata.get('model_architecture', model_type),
+        "use_stacking": use_stacking,
+        "has_meta_learner": has_meta_learner,
+        "ensemble_description": ensemble_description,
         "performance": {
             "train_accuracy": train_perf.get('accuracy', 0),
             "test_accuracy": test_perf.get('accuracy', 0),
