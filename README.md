@@ -1,253 +1,309 @@
-# 🚀 Bitcoin AI Prediction API# 🤖 Bitcoin AI Prediction API
+# 🤖 Bitcoin AI Prediction API
 
-
-
-**High-performance Bitcoin price prediction API using optimized 3-model ensemble****Production-ready ML microservice for Bitcoin price movement predictions**
-
-
-
-[![Accuracy](https://img.shields.io/badge/Accuracy-91.09%25-brightgreen)](https://btc-forecast-api.onrender.com)## 🚀 Live API
+**Production-ready ML microservice for Bitcoin price movement predictions**
 
 [![API Status](https://img.shields.io/badge/API-Live-brightgreen)](https://btc-forecast-api.onrender.com)
 
-[![Models](https://img.shields.io/badge/Models-3--Ensemble-blue)]()**Base URL**: `https://bitcoin-prediction-api.onrender.com` (after deployment)
+**Base URL**: `https://btc-forecast-api.onrender.com`
 
+---
 
+## 🎯 Overview
 
-## 🎯 Overview## 📡 API Endpoints
+Advanced Bitcoin price prediction API powered by a stacked ensemble architecture with meta-learning. The system uses 50,000+ training samples and combines multiple ML models for superior accuracy.
 
-
-
-This API provides real-time Bitcoin price movement predictions using a sophisticated ensemble of machine learning models:### Health Check
-
-```bash
-
-- **CatBoost (50%)** - Gradient boosting for structured dataGET /
-
-- **Random Forest (25%)** - Feature importance and generalization  GET /health
-
-- **Logistic Regression (25%)** - Linear baseline and fast inference```
-
-
-
-**Performance**: 91.09% accuracy on test data with 0.3182 F1 score### Make Prediction
-
-```bash
-
-## 🚀 Quick StartPOST /predict
-
-Content-Type: application/json
-
-### API Endpoint
-
-```{
-
-https://btc-forecast-api.onrender.com  "symbol": "BTCUSDT",
-
-```  "interval": "1m"
-
-}
-
-### Health Check```
-
-```bash
-
-curl https://btc-forecast-api.onrender.com/### Model Info
-
-``````bash
-
-GET /model/info
-
-### Make Prediction```
-
-```bash
-
-curl -X POST https://btc-forecast-api.onrender.com/predict \## 🔑 Authentication (Future)
-
-  -H "Content-Type: application/json" \
-
-  -d '{"symbol": "BTCUSDT", "interval": "1m"}'Currently open for demo. Premium API keys coming soon.
-
+### Model Architecture
+```
+(CatBoost + Random Forest + Logistic Regression) → Meta-Learner → Final Prediction
 ```
 
-## 📊 Response Format
+**Performance Metrics**:
+- **Training Accuracy**: 82.90%
+- **Test Accuracy**: 65.76%
+- **ROC AUC**: 0.7097
+- **Response Time**: < 3 seconds
 
-## 📊 API Reference
+---
 
+## � API Endpoints
+
+### 1. Health Check
+```bash
+GET /health
+```
+
+**Response:**
 ```json
-
-### GET `/`{
-
-Health check endpoint  "symbol": "BTCUSDT",
-
-```json  "timestamp": "2025-10-06T12:00:00",
-
-{  "prediction": 1,
-
-  "status": "healthy",  "prediction_label": "Large Upward Movement Expected",
-
-  "model_loaded": true,  "confidence": 0.85,
-
-  "timestamp": "2025-10-06T07:20:15.859554"  "probabilities": {
-
-}    "no_movement": 0.10,
-
-```    "large_up": 0.85,
-
-    "large_down": 0.05
-
-### POST `/predict`  },
-
-Get Bitcoin price movement prediction  "current_price": 62500.00,
-
-  "expected_movement": 0.5,
-
-**Request:**  "next_periods": [...]
-
-```json}
-
-{```
-
-  "symbol": "BTCUSDT",
-
-  "interval": "1m"## 🛠️ Tech Stack
-
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "timestamp": "2025-10-08T14:00:00"
 }
+```
 
-```- **Framework**: FastAPI
-
-- **Models**: CatBoost + LSTM + Random Forest Ensemble
-
-**Response:**- **Features**: 20 technical indicators
-
-```json- **Data**: Live Binance API
+### 2. Make Prediction (V1.0)
+```bash
+POST /predict
+Content-Type: application/json
 
 {
+  "symbol": "BTCUSDT",
+  "interval": "1m"
+}
+```
 
-  "symbol": "BTCUSDT",## 💼 Contact
-
-  "prediction": 0,
-
-  "prediction_label": "No Significant Movement",For API access, custom integrations, or enterprise solutions:
-
-  "confidence": 0.8561,**kevinroymaglaqui29@gmail.com**
-
-  "probabilities": {**kevinroymaglaqui.is-a.dev**
-
-    "no_movement": 0.8561,
-
-    "large_up": 0.0322,---
-
-    "large_down": 0.1116
-
-  },**Built with ❤️ by Kevin Roy Maglaqui** << Not trying to be cringe
-
-  "current_price": 123944.92,**
-
+**Response:**
+```json
+{
+  "symbol": "BTCUSDT",
+  "timestamp": "2025-10-08T14:00:00",
+  "prediction": 1,
+  "prediction_label": "Large Upward Movement Expected",
+  "confidence": 0.75,
+  "probabilities": {
+    "no_movement": 0.15,
+    "large_up": 0.75,
+    "large_down": 0.10
+  },
+  "current_price": 62500.00,
+  "expected_movement": 0.5,
   "next_periods": [...]
 }
 ```
 
-### GET `/model/info`
-Get model information and performance metrics
+### 3. Enhanced Prediction (V1.1) ✨ NEW
+```bash
+POST /v1.1/predict
+Content-Type: application/json
 
-## 🔧 Architecture
-
-### Model Pipeline
+{
+  "symbol": "BTCUSDT",
+  "interval": "1m"
+}
 ```
-Raw Price Data → Feature Engineering → 3-Model Ensemble → Prediction
+
+**V1.1 Enhancements:**
+- 📈 **Trend Analysis**: Short/long-term direction with strength scores
+- 🏷️ **Market Tags**: Contextual labels (overbought, high_volatility, ranging, etc.)
+- 💡 **Trading Suggestions**: BUY/SELL/WAIT/HOLD with conviction levels
+- 🎯 **Risk Assessment**: Detailed score breakdown and reasoning
+
+**Response:**
+```json
+{
+  "symbol": "BTCUSDT",
+  "prediction": 1,
+  "confidence": 0.75,
+  "trend": {
+    "short_term": "bullish",
+    "long_term": "neutral",
+    "strength": 0.68
+  },
+  "tags": ["low_volatility", "bullish_crossover", "expansion"],
+  "suggestion": {
+    "action": "BUY",
+    "conviction": "high",
+    "reasoning": [
+      "Model predicts upward movement with 75% confidence",
+      "Short-term trend is bullish",
+      "RSI at 55.3"
+    ],
+    "risk_level": "medium",
+    "score_breakdown": {
+      "confidence_boost": 20,
+      "trend_score": 68,
+      "total_score": 180
+    }
+  }
+}
 ```
 
-### Features (70 total)
-- **Price**: OHLCV, returns, moving averages
-- **Technical**: RSI, MACD, Bollinger Bands, ATR
-- **Volume**: Volume indicators, VWAP
-- **Time**: Hour, day patterns
-- **Market**: Volatility, momentum indicators
+### 4. Model Information
+```bash
+GET /model/info
+```
+
+Returns detailed model metadata, architecture, and performance metrics.
+
+---
+
+## 🔑 Authentication
+
+### Free Trial (Guest Access)
+- **3 free predictions** per IP address
+- No API key required
+- Perfect for testing
+
+### API Key Access
+- **3 predictions per minute**
+- Generate via admin endpoint
+- Include in header: `Authorization: Bearer YOUR_API_KEY`
+
+**Get Usage Info:**
+```bash
+GET /api-keys/usage
+Authorization: Bearer YOUR_API_KEY
+```
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| **Framework** | FastAPI 0.104.1 |
+| **Base Models** | CatBoost, Random Forest, Logistic Regression |
+| **Meta-Learner** | LSTM (stacked ensemble) |
+| **Features** | 20 technical indicators |
+| **Data Source** | Binance Live API |
+| **Deployment** | Render (auto-scaling) |
+| **Python** | 3.11+ |
+
+### Key Dependencies
+```
+fastapi==0.104.1
+catboost==1.2.3
+scikit-learn==1.7.2
+python-binance==1.0.19
+pandas==2.1.4
+numpy==1.25.2
+```
+
+---
+
+## 🏗️ Architecture
+
+### Data Pipeline
+```
+Binance API → Feature Engineering → Preprocessing → Ensemble → Meta-Learner → Prediction
+```
+
+### Feature Engineering (20 Features)
+- **Price Indicators**: SMA (7, 14, 21, 50, 200), EMA (12, 26)
+- **Momentum**: RSI (14), MACD, ROC
+- **Volatility**: ATR (14), Bollinger Bands
+- **Volume**: Volume SMA, VWAP
+- **Trend**: ADX (14), Directional Indicators
 
 ### Prediction Classes
-- **0**: No Significant Movement (< 0.5% change)
-- **1**: Large Upward Movement (> 0.5% up)
-- **2**: Large Downward Movement (> 0.5% down)
+- **Class 0**: No Significant Movement (±0.2% threshold)
+- **Class 1**: Large Upward Movement (>0.2% increase expected)
+- **Class 2**: Large Downward Movement (>0.2% decrease expected)
 
-## 🛠️ Local Development
+---
+
+## � Local Development
 
 ### Prerequisites
-- Python 3.11+
-- Binance API keys (for data fetching)
+```bash
+Python 3.11+
+Git LFS (for model files)
+Binance API Keys
+```
 
 ### Setup
 ```bash
+# Clone repository
 git clone https://github.com/vinny-Kev/BTC-Forecast-API.git
 cd BTC-Forecast-API
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Add BINANCE_API_KEY and BINANCE_SECRET_KEY to .env
+
+# Run locally
+python prediction_api.py
+# API available at http://localhost:8000
 ```
 
 ### Environment Variables
 ```bash
-cp .env.example .env
-# Add your Binance API keys to .env
+BINANCE_API_KEY=your_key_here
+BINANCE_SECRET_KEY=your_secret_here
+ADMIN_SECRET=your_admin_secret
 ```
-
-### Run Locally
-```bash
-uvicorn prediction_api:app --reload
-```
-
-## 📈 Performance
-
-| Metric | Value |
-|--------|-------|
-| **Test Accuracy** | 91.09% |
-| **F1 Score** | 0.3182 |
-| **Response Time** | < 2 seconds |
-| **Uptime** | 99.9% |
-
-### Model Improvements
-- ✅ Removed LSTM complexity (+1.88% accuracy)
-- ✅ Optimized ensemble weights
-- ✅ Enhanced feature engineering
-- ✅ Reduced overfitting
-
-## 🚀 Deployment
-
-### Render (Production)
-- Automatically deploys from `main` branch
-- Environment: Python 3.11
-- Health checks enabled
-- Auto-scaling enabled
-
-### Dependencies
-```
-fastapi==0.104.1
-uvicorn==0.24.0
-catboost==1.2.3
-scikit-learn==1.3.2
-pandas==2.1.4
-numpy==1.25.2
-python-binance==1.0.19
-python-dotenv==1.0.1
-joblib==1.3.2
-```
-
-## 📝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 📞 Support
-
-- **API Issues**: Check health endpoint first
-- **Performance**: Model retrains automatically with new data
-- **Rate Limits**: Fair use policy applied
 
 ---
 
-**Live API**: [https://btc-forecast-api.onrender.com](https://btc-forecast-api.onrender.com)
+## 📈 Model Performance
+
+### Metrics Breakdown
+
+| Dataset | Accuracy | F1 Score | ROC AUC |
+|---------|----------|----------|---------|
+| **Training** | 82.90% | 0.5552 | 0.9648 |
+| **Testing** | 65.76% | 0.3948 | 0.7097 |
+
+### Overfitting Analysis
+- Train-Test Accuracy Gap: 17.15%
+- Train-Test F1 Gap: 16.04%
+- Conservative approach prioritizes generalization over training performance
+
+### Recent Improvements
+- ✅ Implemented meta-learner stacking (+8% accuracy boost)
+- ✅ Trained on 50,000+ samples (up from 10,000)
+- ✅ Added contextual market intelligence (V1.1)
+- ✅ Enhanced feature engineering with trend analysis
+- ✅ Optimized ensemble weights for balanced predictions
+
+---
+
+## 🚀 Deployment
+
+### Render Configuration
+- **Runtime**: Python 3.11
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `uvicorn prediction_api:app --host 0.0.0.0 --port $PORT`
+- **Auto-Deploy**: Enabled on `main` branch push
+- **Health Check**: `/health` endpoint monitored
+
+### Git LFS Files
+Model artifacts are stored with Git LFS:
+```
+*.cbm (CatBoost models)
+*.pkl (Preprocessor, feature columns, scikit-learn models)
+*.h5 (LSTM weights if used)
+```
+
+---
+
+## 🎨 Frontend
+
+Interactive web UI included in `index.html`:
+- Real-time prediction display
+- Trend analysis visualization
+- Market condition tags
+- Trading suggestions with reasoning
+- Probability distribution charts
+
+**Usage:** Open `index.html` in browser or serve via static file hosting.
+
+---
+
+## 📞 Contact & Support
+
+**Developer**: Kevin Roy Maglaqui  
+**Email**: kevinroymaglaqui27@gmail.com  
+**Website**: kevinroymaglaqui.is-a.dev  
+**GitHub**: [@vinny-Kev](https://github.com/vinny-Kev)
+
+For enterprise integrations, custom features, or API partnerships, reach out via email.
+
+---
+
+## 📄 License
+
+MIT License - Free for personal and commercial use.
+
+---
+
+**🚀 Live API**: [https://btc-forecast-api.onrender.com](https://btc-forecast-api.onrender.com)
+
+**📚 Docs**: [https://btc-forecast-api.onrender.com/docs](https://btc-forecast-api.onrender.com/docs)
+
+---
+
+*Built with ❤️ using FastAPI, CatBoost, and advanced ML techniques*
