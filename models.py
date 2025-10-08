@@ -1,15 +1,12 @@
 """
 Machine Learning Models Module
-Contains CatBoost, Random Forest, and LSTM models with custom configurations
+Contains CatBoost, Random Forest, and Logistic Regression models with ensemble support
 """
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 from sklearn.ensemble import RandomForestClassifier
-from tensorflow import keras
-from tensorflow.keras import layers, callbacks
-from tensorflow.keras.utils import to_categorical
 import joblib
 import json
 import os
@@ -165,170 +162,6 @@ class RandomForestModel:
         """Load model"""
         self.model = joblib.load(path)
         print(f"✓ Random Forest model loaded from {path}")
-
-
-class LSTMModel:
-    """LSTM model for sequence prediction"""
-    
-    def __init__(self, n_classes=3):
-        self.n_classes = n_classes
-        self.model = None
-        self.history = None
-        
-    def build(self, input_shape, lstm_units=[128, 64], dropout=0.3, recurrent_dropout=0.0, l2_reg=0.0):
-        """
-        Build LSTM model with regularization
-        
-        Args:
-            input_shape: (timesteps, features)
-            lstm_units: List of LSTM layer units
-            dropout: Dropout rate for dropout layers
-            recurrent_dropout: Dropout rate for recurrent connections
-            l2_reg: L2 regularization strength
-        """
-        from tensorflow.keras import regularizers
-        
-        model = keras.Sequential()
-        
-        # First LSTM layer with regularization
-        model.add(layers.LSTM(
-            lstm_units[0],
-            input_shape=input_shape,
-            return_sequences=len(lstm_units) > 1,
-            dropout=dropout,
-            recurrent_dropout=recurrent_dropout,
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        
-        # Additional LSTM layers with regularization
-        for i, units in enumerate(lstm_units[1:]):
-            return_seq = i < len(lstm_units) - 2
-            model.add(layers.LSTM(
-                units, 
-                return_sequences=return_seq,
-                dropout=dropout,
-                recurrent_dropout=recurrent_dropout,
-                kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-            ))
-        
-        # Dense layers with L2 regularization
-        model.add(layers.Dense(
-            64, 
-            activation='relu',
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        model.add(layers.Dropout(dropout))
-        model.add(layers.Dense(
-            32, 
-            activation='relu',
-            kernel_regularizer=regularizers.l2(l2_reg) if l2_reg > 0 else None
-        ))
-        model.add(layers.Dropout(dropout / 2))
-        
-        # Output layer
-        model.add(layers.Dense(self.n_classes, activation='softmax'))
-        
-        self.model = model
-        
-        print("✓ LSTM model built with regularization")
-        print(f"  Architecture: LSTM{lstm_units} → Dense[64, 32] → Softmax({self.n_classes})")
-        print(f"  Regularization: Dropout={dropout}, Recurrent Dropout={recurrent_dropout}, L2={l2_reg}")
-        
-        return self
-    
-    def compile(self, learning_rate=0.001, class_weights=None):
-        """Compile LSTM model"""
-        
-        optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
-        
-        # For weighted loss, we'll use sample weights during training
-        # Use SparseCategoricalAccuracy since we have integer labels
-        self.model.compile(
-            optimizer=optimizer,
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']  # Removed F1Score to avoid shape mismatch
-        )
-        
-        print("✓ LSTM model compiled")
-        return self
-    
-    def train(self, X_train, y_train, X_val=None, y_val=None, 
-             class_weights=None, epochs=50, batch_size=32):
-        """Train LSTM model"""
-        print("\nTraining LSTM...")
-        
-        # Create sample weights from class weights
-        sample_weights = None
-        if class_weights:
-            sample_weights = np.array([class_weights[y] for y in y_train])
-        
-        # Callbacks
-        early_stop = callbacks.EarlyStopping(
-            monitor='val_loss' if X_val is not None and len(X_val) > 0 else 'loss',
-            patience=10,
-            restore_best_weights=True,
-            verbose=1
-        )
-        
-        reduce_lr = callbacks.ReduceLROnPlateau(
-            monitor='val_loss' if X_val is not None and len(X_val) > 0 else 'loss',
-            factor=0.5,
-            patience=5,
-            min_lr=1e-6,
-            verbose=1
-        )
-        
-        # Train with or without validation
-        if X_val is not None and y_val is not None and len(X_val) > 0:
-            self.history = self.model.fit(
-                X_train, y_train,
-                validation_data=(X_val, y_val),
-                sample_weight=sample_weights,
-                epochs=epochs,
-                batch_size=batch_size,
-                callbacks=[early_stop, reduce_lr],
-                verbose=1
-            )
-        else:
-            # Train without validation
-            self.history = self.model.fit(
-                X_train, y_train,
-                sample_weight=sample_weights,
-                epochs=epochs,
-                batch_size=batch_size,
-                callbacks=[early_stop, reduce_lr],
-                verbose=1
-            )
-        
-        print("✓ LSTM training complete")
-        return self
-    
-    def predict(self, X):
-        """Get predictions"""
-        probs = self.model.predict(X, verbose=0)
-        return np.argmax(probs, axis=1)
-    
-    def predict_proba(self, X):
-        """Get prediction probabilities"""
-        return self.model.predict(X, verbose=0)
-    
-    def save(self, path):
-        """Save model in Keras 3 compatible format"""
-        # Save with save_format='tf' for better compatibility
-        self.model.save(path, save_format='keras')
-        print(f"✓ LSTM model saved to {path}")
-    
-    def load(self, path):
-        """Load model with compatibility handling"""
-        try:
-            # Try loading with compile=False to avoid optimizer issues
-            self.model = keras.models.load_model(path, compile=False)
-            # Recompile the model
-            self.compile()
-            print(f"✓ LSTM model loaded from {path}")
-        except Exception as e:
-            print(f"⚠ Error loading LSTM model: {e}")
-            raise
 
 
 class EnsembleModel:
