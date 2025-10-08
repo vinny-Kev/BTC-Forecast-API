@@ -1,0 +1,77 @@
+{
+  "symbol": "BTCUSDT",
+  "interval": "1m",
+  "n_features": 20,
+  "n_classes": 3,
+  "training_date": "20251008_091629",
+  "class_weights": {
+    "0": 0.3744746427570748,
+    "1": 5.466257668711656,
+    "2": 6.8188775510204085
+  },
+  "model_architecture": "3-model ensemble: CatBoost + Random Forest + Logistic Regression",
+  "ensemble_weights": {
+    "catboost": 0.5,
+    "rf": 0.25,
+    "logistic": 0.25
+  },
+  "threshold_percent": 0.2,
+  "lookahead_periods": 6,
+  "contextual_thresholds": {
+    "high_volatility_atr_pct": 1.5,
+    "very_high_volatility_atr_pct": 2.5,
+    "overbought_rsi": 70,
+    "oversold_rsi": 30,
+    "strong_momentum_roc": 2.0,
+    "high_volume_ratio": 1.5,
+    "tight_bollinger": 0.015,
+    "wide_bollinger": 0.035,
+    "strong_trend_adx": 40,
+    "weak_trend_adx": 20,
+    "short_trend_threshold": 0.1,
+    "long_trend_threshold": 0.15
+  },
+  "trend_config": {
+    "short_term_smas": [
+      7,
+      14
+    ],
+    "long_term_smas": [
+      21,
+      50
+    ],
+    "adx_periods": 14,
+    "macd_config": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9
+    }
+  },
+  "action_thresholds": {
+    "high_confidence": 0.7,
+    "medium_confidence": 0.5,
+    "min_trend_score": 2,
+    "high_conviction_score": 4
+  },
+  "performance": {
+    "train": {
+      "accuracy": 0.8106995884773662,
+      "precision_macro": 0.5324538500411008,
+      "recall_macro": 0.7429566590625866,
+      "f1_macro": 0.5853303639484396,
+      "roc_auc_ovr": 0.918891466088542
+    },
+    "test": {
+      "accuracy": 0.6518703241895262,
+      "precision_macro": 0.41890373061389236,
+      "recall_macro": 0.48410982410982406,
+      "f1_macro": 0.4171732144934521,
+      "roc_auc_ovr": 0.7484948244368042
+    },
+    "overfitting_analysis": {
+      "train_test_accuracy_gap": 0.15882926428784006,
+      "train_test_f1_gap": 0.1681571494549875,
+      "train_test_roc_gap": 0.17039664165173785
+    }
+  }
+}

@@ -6,7 +6,7 @@ FastAPI service for serving ML model predictions
 from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import pandas as pd
 import numpy as np
 import joblib
@@ -187,6 +187,51 @@ class PredictionResponse(BaseModel):
     current_price: float
     expected_movement: Optional[float] = None
     next_periods: List[Dict] = []
+
+
+class TrendInfo(BaseModel):
+    """Trend direction and strength"""
+    short_term: str = Field(..., description="Short-term trend: bullish/bearish/neutral")
+    long_term: str = Field(..., description="Long-term trend: bullish/bearish/neutral")
+    strength: str = Field(..., description="Trend strength: weak/moderate/strong")
+
+
+class ScoreBreakdown(BaseModel):
+    """Score breakdown for suggestion"""
+    confidence_boost: int
+    trend_score: int
+    total_score: int
+
+
+class TradingSuggestion(BaseModel):
+    """Actionable trading suggestion"""
+    action: str = Field(..., description="Suggested action: BUY/SELL/WAIT/HOLD")
+    conviction: str = Field(..., description="Conviction level: low/medium/high")
+    reasoning: List[str] = Field(..., description="List of reasons for suggestion")
+    risk_level: str = Field(..., description="Risk level: low/medium/high")
+    score_breakdown: ScoreBreakdown
+
+
+class PredictionResponseV1_1(BaseModel):
+    """Enhanced prediction response V1.1 with enriched analysis"""
+    # Core prediction
+    symbol: str
+    timestamp: str
+    prediction: int
+    prediction_label: str
+    confidence: float
+    probabilities: Dict[str, float]
+    current_price: float
+    
+    # V1.1 Enhancements
+    trend: TrendInfo
+    tags: List[str] = Field(default_factory=list, description="Contextual market tags")
+    suggestion: TradingSuggestion
+    
+    # Metadata
+    api_version: str = "1.1"
+    model_version: str
+    feature_count: int
 
 
 class HealthResponse(BaseModel):
@@ -444,6 +489,263 @@ async def predict(
             expected_movement=expected_movement,
             next_periods=next_periods
         )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(e)}"
+        )
+
+
+@app.post("/v1.1/predict", response_model=PredictionResponseV1_1)
+async def predict_v1_1(
+    request: Request,
+    prediction_request: PredictionRequest,
+    auth_data: dict = Depends(verify_api_key)
+):
+    """
+    Enhanced prediction endpoint V1.1 with trend analysis, contextual tags, and trading suggestions
+    
+    Free Trial: 3 predictions per IP address (no API key needed)
+    With API Key: 3 predictions per minute
+    
+    Returns:
+    - Core prediction data (like V1.0)
+    - Trend analysis (short-term and long-term direction with strength)
+    - Contextual tags (e.g., "low_volatility", "ranging", "bullish_crossover")
+    - Trading suggestions with conviction levels and risk assessment
+    """
+    
+    if ensemble_model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Models not loaded. Please train models first."
+        )
+    
+    try:
+        # Import DataScraper only when needed (to defer API key validation)
+        from data_scraper import DataScraper
+        
+        # Fetch live data
+        scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
+        
+        # Get enough historical data for feature engineering
+        lookback = "6 hours ago UTC"  # Should be enough for all features
+        df = scraper.fetch_historical_(lookback)
+        
+        # Get market context
+        _, context = scraper.fetch_context_data()
+        
+        # Generate features (without targets for prediction)
+        df_features = feature_engineer.generate_all_features(
+            df,
+            order_book_context=context.get('order_book'),
+            ticker_context=context.get('ticker'),
+            create_targets=False
+        )
+        
+        # Get only the feature columns we trained on
+        X = df_features[feature_columns].tail(sequence_length + 1)
+        
+        # Scale features
+        X_scaled = preprocessor.transform(X)
+        
+        # Convert back to DataFrame to use .tail() method
+        X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
+        
+        # Prepare for prediction
+        # For 3-model ensemble (CatBoost, RF, Logistic): use latest data point
+        X_regular = X_scaled_df.tail(1).values
+        
+        # Get ensemble predictions (no LSTM sequences needed)
+        probabilities = ensemble_model.predict_proba(X_regular)[0]
+        prediction = int(np.argmax(probabilities))
+        confidence = float(probabilities[prediction])
+        
+        # Get prediction label
+        labels = {
+            0: "No Significant Movement",
+            1: "Large Upward Movement Expected",
+            2: "Large Downward Movement Expected"
+        }
+        prediction_label = labels[prediction]
+        
+        # Get current price
+        current_price = float(df['close'].iloc[-1])
+        
+        # ===== V1.1 ENHANCEMENTS =====
+        
+        # Extract trend information
+        latest_row = df_features.iloc[-1]
+        
+        # Determine short-term trend
+        short_ma = latest_row.get('SMA_20', 0)
+        mid_ma = latest_row.get('SMA_50', 0)
+        if current_price > short_ma > mid_ma:
+            short_term_direction = "bullish"
+        elif current_price < short_ma < mid_ma:
+            short_term_direction = "bearish"
+        else:
+            short_term_direction = "neutral"
+        
+        # Determine long-term trend
+        long_ma = latest_row.get('SMA_200', 0)
+        if current_price > long_ma and short_ma > long_ma:
+            long_term_direction = "bullish"
+        elif current_price < long_ma and short_ma < long_ma:
+            long_term_direction = "bearish"
+        else:
+            long_term_direction = "neutral"
+        
+        # Calculate trend strength (0.0 to 1.0)
+        macd = abs(latest_row.get('MACD', 0))
+        rsi = latest_row.get('RSI_14', 50)
+        rsi_strength = abs(rsi - 50) / 50  # 0 to 1
+        adx = latest_row.get('ADX_14', 0) / 100 if latest_row.get('ADX_14', 0) <= 100 else 1.0
+        trend_strength = float(np.mean([rsi_strength, adx]))
+        
+        trend_info = TrendInfo(
+            short_term=short_term_direction,
+            long_term=long_term_direction,
+            strength=round(trend_strength, 2)
+        )
+        
+        # Generate contextual tags
+        tags = []
+        
+        # Volatility tags
+        volatility = latest_row.get('volatility', 0)
+        if volatility < 0.01:
+            tags.append("low_volatility")
+        elif volatility > 0.03:
+            tags.append("high_volatility")
+        
+        # Momentum tags
+        rsi_val = latest_row.get('RSI_14', 50)
+        if rsi_val > 70:
+            tags.append("overbought")
+        elif rsi_val < 30:
+            tags.append("oversold")
+        
+        # Trend tags
+        bb_upper = latest_row.get('BB_upper', float('inf'))
+        bb_lower = latest_row.get('BB_lower', 0)
+        if current_price > bb_upper:
+            tags.append("expansion")
+        elif current_price < bb_lower:
+            tags.append("contraction")
+        else:
+            tags.append("ranging")
+        
+        # Crossover tags
+        macd_val = latest_row.get('MACD', 0)
+        macd_signal = latest_row.get('MACD_signal', 0)
+        if macd_val > macd_signal:
+            tags.append("bullish_crossover")
+        elif macd_val < macd_signal:
+            tags.append("bearish_crossover")
+        
+        # Volume tags
+        volume_sma = latest_row.get('volume_sma', 1)
+        current_volume = latest_row.get('volume', 0)
+        if current_volume > volume_sma * 1.5:
+            tags.append("high_volume")
+        elif current_volume < volume_sma * 0.5:
+            tags.append("low_volume")
+        
+        # Generate trading suggestion
+        # Score calculation
+        technical_score = int(confidence * 100)
+        
+        # Momentum score
+        momentum_score = int((rsi_strength + adx) * 50)
+        
+        # Volatility score (lower is better for confidence)
+        volatility_score = int(max(0, 100 - (volatility * 1000)))
+        
+        # Confidence boost based on alignment
+        alignment_boost = 0
+        if short_term_direction == long_term_direction:
+            alignment_boost += 10
+        if trend_strength > 0.7:
+            alignment_boost += 10
+        
+        # Total score
+        total_score = technical_score + momentum_score + volatility_score + alignment_boost
+        
+        score_breakdown = ScoreBreakdown(
+            confidence_boost=alignment_boost,
+            trend_score=int(trend_strength * 100),
+            total_score=total_score
+        )
+        
+        # Determine action
+        if prediction == 1 and confidence > 0.6:
+            action = "BUY"
+            risk = "medium" if confidence > 0.75 else "high"
+            conviction_level = "high" if confidence > 0.75 else "medium"
+            reasons = [
+                f"Model predicts upward movement with {confidence*100:.1f}% confidence",
+                f"Short-term trend is {short_term_direction}",
+                f"RSI at {rsi_val:.1f}"
+            ]
+        elif prediction == 2 and confidence > 0.6:
+            action = "SELL"
+            risk = "medium" if confidence > 0.75 else "high"
+            conviction_level = "high" if confidence > 0.75 else "medium"
+            reasons = [
+                f"Model predicts downward movement with {confidence*100:.1f}% confidence",
+                f"Short-term trend is {short_term_direction}",
+                f"RSI at {rsi_val:.1f}"
+            ]
+        elif confidence < 0.5:
+            action = "WAIT"
+            risk = "low"
+            conviction_level = "low"
+            reasons = [
+                f"Low model confidence ({confidence*100:.1f}%)",
+                "Market conditions unclear",
+                "Consider waiting for better signal"
+            ]
+        else:
+            action = "HOLD"
+            risk = "low"
+            conviction_level = "medium"
+            reasons = [
+                f"No strong directional signal (confidence: {confidence*100:.1f}%)",
+                f"Trend alignment: {short_term_direction}/{long_term_direction}",
+                "Monitor for clearer signals"
+            ]
+        
+        suggestion = TradingSuggestion(
+            action=action,
+            conviction=conviction_level,
+            reasoning=reasons,
+            risk_level=risk,
+            score_breakdown=score_breakdown
+        )
+        
+        # Build V1.1 response
+        response = PredictionResponseV1_1(
+            symbol=prediction_request.symbol,
+            timestamp=datetime.now().isoformat(),
+            prediction=prediction,
+            prediction_label=prediction_label,
+            confidence=confidence,
+            probabilities={
+                'no_movement': float(probabilities[0]),
+                'large_up': float(probabilities[1]),
+                'large_down': float(probabilities[2])
+            },
+            current_price=current_price,
+            trend=trend_info,
+            tags=tags,
+            suggestion=suggestion,
+            model_version=metadata.get('version', 'unknown'),
+            feature_count=len(feature_columns) if feature_columns else 0
+        )
+        
+        return response
         
     except Exception as e:
         raise HTTPException(
