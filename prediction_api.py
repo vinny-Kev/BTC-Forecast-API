@@ -18,6 +18,7 @@ import secrets
 import json
 from collections import defaultdict
 import time
+import pickle
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -227,44 +228,37 @@ def load_models(model_dir: str):
     ensemble_model = EnsembleModel(n_classes=3)
     ensemble_model.load(model_dir)
     
-    # Load preprocessor
-    preprocessor_path = os.path.join(model_dir, 'preprocessor.pkl')
-    if os.path.exists(preprocessor_path):
-        try:
-            preprocessor = joblib.load(preprocessor_path)
-            print(f"✓ Preprocessor loaded")
-        except Exception as e:
-            print(f"⚠ Could not load saved preprocessor: {e}")
-            print("  Using StandardScaler instead")
-            from sklearn.preprocessing import StandardScaler
-            preprocessor = StandardScaler()
-    else:
-        print("⚠ Preprocessor not found, using StandardScaler")
-        from sklearn.preprocessing import StandardScaler
-        preprocessor = StandardScaler()
-    
-    # Load feature columns
-    feature_cols_path = os.path.join(model_dir, 'feature_columns.pkl')
-    if os.path.exists(feature_cols_path):
-        feature_columns = joblib.load(feature_cols_path)
-        print(f"✓ Feature columns loaded ({len(feature_columns)} features)")
-    else:
-        raise FileNotFoundError(f"Feature columns not found: {feature_cols_path}")
-    
     # Load metadata
-    import json
     metadata_path = os.path.join(model_dir, 'metadata.json')
     if os.path.exists(metadata_path):
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
         
         sequence_length = metadata.get('sequence_length', 30)
-        print(f"✓ Metadata loaded (sequence_length: {sequence_length})")
+        feature_columns = metadata.get('feature_columns', [])
+        preprocessor_path = metadata.get('preprocessor', 'preprocessor.pkl')
+        model_type = metadata.get('model_type', 'unknown')
+        print(f"\u2713 Metadata loaded (sequence_length: {sequence_length}, model_type: {model_type})")
     else:
-        print(f"⚠ Metadata not found at {metadata_path}, using defaults")
-        metadata = {"sequence_length": 30, "threshold_percent": 0.5}
+        print(f"\u26a0 Metadata not found at {metadata_path}, using defaults")
+        metadata = {"sequence_length": 30, "threshold_percent": 0.5, "feature_columns": [], "model_type": "unknown"}
         sequence_length = 30
-    
+        feature_columns = []
+        preprocessor_path = 'preprocessor.pkl'
+        model_type = 'unknown'
+
+    # Load preprocessor
+    if os.path.exists(preprocessor_path):
+        try:
+            with open(preprocessor_path, 'rb') as f:
+                preprocessor = pickle.load(f)
+            print(f"\u2713 Preprocessor loaded from {preprocessor_path}")
+        except Exception as e:
+            print(f"\u26a0 Could not load preprocessor: {e}")
+            raise
+    else:
+        raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
+
     # Initialize feature engineer
     feature_engineer = FeatureEngineer()
     print(f"✓ Feature engineer initialized")
@@ -433,108 +427,58 @@ async def predict(
     - confidence: probability of predicted class
     - probabilities: all class probabilities
     """
-    
     if ensemble_model is None:
         raise HTTPException(
             status_code=503,
             detail="Models not loaded. Please train models first."
         )
-    
+
     try:
-        # Import DataScraper only when needed (to defer API key validation)
-        from data_scraper import DataScraper
-        
         # Fetch live data
+        from data_scraper import DataScraper
         scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
-        
-        # Get enough historical data for feature engineering
-        lookback = "6 hours ago UTC"  # Should be enough for all features
-        df = scraper.fetch_historical_(lookback)
-        
-        # Get market context
+        df = scraper.fetch_historical_("6 hours ago UTC")
         _, context = scraper.fetch_context_data()
-        
-        # Generate features (without targets for prediction)
+
+        # Generate features
         df_features = feature_engineer.generate_all_features(
             df,
             order_book_context=context.get('order_book'),
             ticker_context=context.get('ticker'),
             create_targets=False
         )
-        
-        # Get only the feature columns we trained on
+
+        # Ensure feature columns match
         X = df_features[feature_columns].tail(sequence_length + 1)
-        
-        # Scale features
         X_scaled = preprocessor.transform(X)
-        
-        # Convert back to DataFrame to use .tail() method
         X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
-        
+
         # Prepare for prediction
-        # For 3-model ensemble (CatBoost, RF, Logistic): use latest data point
         X_regular = X_scaled_df.tail(1).values
-        
-        # Get ensemble predictions (no LSTM sequences needed)
         probabilities = ensemble_model.predict_proba(X_regular)[0]
         prediction = int(np.argmax(probabilities))
         confidence = float(probabilities[prediction])
-        
-        # Get prediction label
+
         labels = {
             0: "No Significant Movement",
             1: "Large Upward Movement Expected",
             2: "Large Downward Movement Expected"
         }
         prediction_label = labels[prediction]
-        
-        # Get current price
         current_price = float(df['close'].iloc[-1])
-        
-        # Calculate expected movement magnitude (rough estimate)
         threshold = metadata.get('threshold_percent', 0.5)
-        expected_movement = None
-        if prediction == 1:
-            expected_movement = threshold  # Positive percentage
-        elif prediction == 2:
-            expected_movement = -threshold  # Negative percentage
-        
-        # Generate predictions for next periods
-        next_periods = []
-        for i in range(1, 7):  # Next 6 periods
-            future_price = current_price
-            if prediction == 1:
-                future_price = current_price * (1 + (threshold / 100) * (i / 6))
-            elif prediction == 2:
-                future_price = current_price * (1 - (threshold / 100) * (i / 6))
-            
-            next_periods.append({
-                'period': i,
-                'estimated_price': round(future_price, 2),
-                'confidence': round(confidence * (1 - i * 0.05), 3)  # Decay confidence
-            })
-        
+        expected_movement = threshold if prediction == 1 else -threshold if prediction == 2 else None
+
         return PredictionResponse(
-            symbol=prediction_request.symbol,
-            timestamp=datetime.now().isoformat(),
             prediction=prediction,
             prediction_label=prediction_label,
             confidence=confidence,
-            probabilities={
-                'no_movement': float(probabilities[0]),
-                'large_up': float(probabilities[1]),
-                'large_down': float(probabilities[2])
-            },
+            probabilities=probabilities.tolist(),
             current_price=current_price,
-            expected_movement=expected_movement,
-            next_periods=next_periods
+            expected_movement=expected_movement
         )
-        
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Prediction failed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
 
 @app.post("/v1.1/predict", response_model=PredictionResponseV1_1)

@@ -1,0 +1,12 @@
+{
+    "model_type": "transformer_regressor_v2",
+    "loss_type": "mae",
+    "sequence_length": 60,
+    "n_features": 106,
+    "d_model": 64,
+    "num_heads": 4,
+    "num_blocks": 2,
+    "ff_dim": 128,
+    "dropout": 0.1,
+    "timestamp": "2025-10-08 23:33:09"
+}
