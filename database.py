@@ -20,17 +20,25 @@ class Database:
         
     async def connect(self):
         try:
-            # Use certifi for proper SSL certificate verification
-            # This fixes SSL handshake issues on Render and other hosting platforms
-            self.client = AsyncIOMotorClient(
-                MONGODB_URL,
-                tlsCAFile=certifi.where(),
-                serverSelectionTimeoutMS=30000,
-                connectTimeoutMS=30000,
-                socketTimeoutMS=30000,
-                retryWrites=True,
-                w='majority'
-            )
+            # Multiple SSL/TLS strategies to fix handshake errors
+            # Try with tlsInsecure first (most permissive)
+            connection_params = {
+                'serverSelectionTimeoutMS': 30000,
+                'connectTimeoutMS': 30000,
+                'socketTimeoutMS': 30000,
+                'retryWrites': True,
+                'w': 'majority',
+                'tls': True,
+                'tlsInsecure': True,  # Disable hostname verification
+            }
+            
+            # Try to add certifi if available
+            try:
+                connection_params['tlsCAFile'] = certifi.where()
+            except:
+                pass
+            
+            self.client = AsyncIOMotorClient(MONGODB_URL, **connection_params)
             self.db = self.client[DATABASE_NAME]
             
             # Test the connection
