@@ -365,6 +365,57 @@ async def health():
     )
 
 
+@app.get("/database/health")
+async def database_health_check():
+    """
+    Database health check endpoint - validates MongoDB connection with SSL handshake
+    Returns detailed connection status for debugging
+    """
+    try:
+        # Check if MongoDB client exists
+        if not db.client:
+            return {
+                "status": "disconnected",
+                "connected": False,
+                "ssl_handshake": "not_attempted",
+                "error": "MongoDB client not initialized",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Attempt to ping the database (this performs SSL handshake)
+        start_time = datetime.now()
+        await db.client.admin.command('ping')
+        response_time = (datetime.now() - start_time).total_seconds()
+        
+        # Get server info for validation
+        server_info = await db.client.server_info()
+        
+        return {
+            "status": "connected",
+            "connected": True,
+            "ssl_handshake": "successful",
+            "response_time_seconds": round(response_time, 3),
+            "mongodb_version": server_info.get("version"),
+            "database_name": db.db.name if db.db is not None else None,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "connected": False,
+            "ssl_handshake": "failed",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.now().isoformat()
+        }
+    return HealthResponse(
+        status="healthy",
+        model_loaded=ensemble_model is not None,
+        timestamp=datetime.now().isoformat()
+    )
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(
     request: Request,
