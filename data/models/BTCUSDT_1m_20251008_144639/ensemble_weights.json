@@ -1,0 +1,1 @@
+{"weights": {"catboost": 0.5, "rf": 0.25, "logistic": 0.25}, "use_stacking": true, "has_meta_learner": true}

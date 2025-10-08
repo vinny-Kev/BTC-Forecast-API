@@ -3,18 +3,20 @@
   "interval": "1m",
   "n_features": 20,
   "n_classes": 3,
-  "training_date": "20251008_091629",
+  "training_date": "20251008_144639",
   "class_weights": {
-    "0": 0.3744746427570748,
-    "1": 5.466257668711656,
-    "2": 6.8188775510204085
+    "0": 0.3545865138268931,
+    "1": 10.80048270313757,
+    "2": 11.464560204953031
   },
-  "model_architecture": "3-model ensemble: CatBoost + Random Forest + Logistic Regression",
+  "model_architecture": "Stacked Ensemble: (CatBoost + Random Forest + Logistic) \u2192 Meta-Learner",
   "ensemble_weights": {
     "catboost": 0.5,
     "rf": 0.25,
     "logistic": 0.25
   },
+  "use_stacking": true,
+  "has_meta_learner": true,
   "threshold_percent": 0.2,
   "lookahead_periods": 6,
   "contextual_thresholds": {
@@ -55,23 +57,23 @@
   },
   "performance": {
     "train": {
-      "accuracy": 0.8106995884773662,
-      "precision_macro": 0.5324538500411008,
-      "recall_macro": 0.7429566590625866,
-      "f1_macro": 0.5853303639484396,
-      "roc_auc_ovr": 0.918891466088542
+      "accuracy": 0.8290254500310367,
+      "precision_macro": 0.4939874942082381,
+      "recall_macro": 0.8713901193621467,
+      "f1_macro": 0.55515135195515,
+      "roc_auc_ovr": 0.9648395228651209
     },
     "test": {
-      "accuracy": 0.6518703241895262,
-      "precision_macro": 0.41890373061389236,
-      "recall_macro": 0.48410982410982406,
-      "f1_macro": 0.4171732144934521,
-      "roc_auc_ovr": 0.7484948244368042
+      "accuracy": 0.6575628165656967,
+      "precision_macro": 0.4059764323685724,
+      "recall_macro": 0.47336420542373947,
+      "f1_macro": 0.3947799792021796,
+      "roc_auc_ovr": 0.7097280957112817
     },
     "overfitting_analysis": {
-      "train_test_accuracy_gap": 0.15882926428784006,
-      "train_test_f1_gap": 0.1681571494549875,
-      "train_test_roc_gap": 0.17039664165173785
+      "train_test_accuracy_gap": 0.17146263346533996,
+      "train_test_f1_gap": 0.16037137275297036,
+      "train_test_roc_gap": 0.25511142715383917
     }
   }
 }
