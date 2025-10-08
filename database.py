@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, List
 import uuid
 import bcrypt
-import ssl
+import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, DESCENDING
 from dotenv import load_dotenv
@@ -20,20 +20,22 @@ class Database:
         
     async def connect(self):
         try:
-            # Configure SSL for MongoDB Atlas
-            # This fixes SSL handshake issues on some hosting platforms
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
+            # Use certifi for proper SSL certificate verification
+            # This fixes SSL handshake issues on Render and other hosting platforms
             self.client = AsyncIOMotorClient(
                 MONGODB_URL,
-                tlsAllowInvalidCertificates=True,
+                tlsCAFile=certifi.where(),
                 serverSelectionTimeoutMS=30000,
                 connectTimeoutMS=30000,
-                socketTimeoutMS=30000
+                socketTimeoutMS=30000,
+                retryWrites=True,
+                w='majority'
             )
             self.db = self.client[DATABASE_NAME]
+            
+            # Test the connection
+            await self.client.admin.command('ping')
+            
             await self._create_indexes()
             print(f'Connected to MongoDB: {DATABASE_NAME}')
         except Exception as e:
