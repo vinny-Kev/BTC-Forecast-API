@@ -12,13 +12,16 @@ import numpy as np
 import joblib
 import os
 import sys
-from typing import List, Dict, Optional, Annotated
-from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+from datetime import datetime
 import secrets
 import json
-from collections import defaultdict
 import time
 import pickle
+import logging
+import tensorflow as tf
+import uuid
+import bcrypt
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +30,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from feature_engineering import FeatureEngineer
 from models import EnsembleModel
 from database import db  # MongoDB database instance
+from src.model_manager import ModelManager
 
 # Initialize FastAPI
 app = FastAPI(
@@ -51,13 +55,24 @@ feature_engineer = None
 feature_columns = None
 metadata = None
 sequence_length = 30
+transformer_model = None
+transformer_metadata = None
+# Model manager for safe load/validate/swap
+model_manager = ModelManager()
+
+# Class labels for ensemble predictions
+ENSEMBLE_LABELS = {
+    0: "No Significant Movement",
+    1: "Large Upward Movement Expected",
+    2: "Large Downward Movement Expected"
+}
 
 # Security
 security = HTTPBearer(auto_error=False)
 
 # Logger
-import logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("prediction_api")
+logger.setLevel(logging.INFO)
 
 async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
@@ -109,22 +124,34 @@ async def verify_api_key(request: Request, credentials: HTTPAuthorizationCredent
         
         # Guest access (3 free calls total, persisted in database)
         guest_usage = await db.get_guest_usage(client_ip)
-        
-        if guest_usage["calls_used"] >= guest_usage["calls_limit"]:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Free trial expired. You've used all {guest_usage['calls_limit']} free predictions. Contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key."
-            )
-        
-        # Increment guest usage
-        await db.increment_guest_usage(client_ip)
-        
-        return {
-            "type": "guest",
-            "ip": client_ip,
-            "calls_used": guest_usage["calls_used"] + 1,
-            "calls_remaining": guest_usage["calls_limit"] - guest_usage["calls_used"] - 1
-        }
+
+        # Allow disabling the guest limiter locally for testing by setting
+        # the environment variable DISABLE_GUEST_LIMITS=true
+        disable_limiter = os.getenv("DISABLE_GUEST_LIMITS", "false").lower() in ("1", "true", "yes")
+
+        if not disable_limiter:
+            if guest_usage["calls_used"] >= guest_usage["calls_limit"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Free trial expired. You've used all {guest_usage['calls_limit']} free predictions. Contact Kevin Maglaqui (kevinroymaglaqui27@gmail.com) for an API key."
+                )
+
+            # Increment guest usage
+            await db.increment_guest_usage(client_ip)
+            return {
+                "type": "guest",
+                "ip": client_ip,
+                "calls_used": guest_usage["calls_used"] + 1,
+                "calls_remaining": guest_usage["calls_limit"] - guest_usage["calls_used"] - 1
+            }
+        else:
+            # Limiter disabled: allow guest requests without incrementing usage
+            return {
+                "type": "guest",
+                "ip": client_ip,
+                "calls_used": guest_usage.get("calls_used", 0),
+                "calls_remaining": float("inf")
+            }
     
     except HTTPException:
         # Re-raise HTTP exceptions (auth failures, quota exceeded)
@@ -156,6 +183,12 @@ class PredictionResponse(BaseModel):
     current_price: float
     expected_movement: Optional[float] = None
     next_periods: List[Dict] = []
+
+
+class TransformerPredictionResponse(PredictionResponse):
+    """Response model for transformer regression predictions."""
+    prediction: float
+    probabilities: Dict[str, float] = Field(default_factory=dict)
 
 
 class TrendInfo(BaseModel):
@@ -212,58 +245,182 @@ class HealthResponse(BaseModel):
     timestamp: str
 
 
+def validate_metadata(metadata):
+    """Validate metadata to ensure all required fields are present."""
+    # Only check for fields that should be in metadata.json
+    # feature_columns, preprocessor, model_type are loaded separately
+    required_fields = ["sequence_length"]
+    missing_fields = [field for field in required_fields if field not in metadata]
+    if missing_fields:
+        logger.warning(
+            "⚠ Metadata is missing expected fields: %s. Falling back to defaults where necessary.",
+            ", ".join(missing_fields)
+        )
+        return False
+    return True
+
+
 def load_models(model_dir: str):
-    """Load trained models and preprocessor"""
-    global ensemble_model, preprocessor, feature_engineer, feature_columns, metadata, sequence_length
-    
-    print(f"Loading models from {model_dir}...")
-    
-    # Check if directory exists and list contents
+    """Load trained models, preprocessor, and transformer assets."""
+    global ensemble_model
+    global preprocessor
+    global feature_engineer
+    global feature_columns
+    global metadata
+    global sequence_length
+    global transformer_model
+    global transformer_metadata
+
+    logger.info(f"Loading models from {model_dir}...")
+
     if not os.path.exists(model_dir):
         raise FileNotFoundError(f"Model directory not found: {model_dir}")
-    
-    print(f"Directory contents: {os.listdir(model_dir)}")
-    
-    # Load ensemble (CatBoost, Random Forest, Logistic Regression)
-    ensemble_model = EnsembleModel(n_classes=3)
-    ensemble_model.load(model_dir)
-    
-    # Load metadata
+
+    logger.info(f"Directory contents: {os.listdir(model_dir)}")
+
+    # ------------------------------------------------------------------
+    # Ensemble models (CatBoost + Random Forest + optional Logistic)
+    # ------------------------------------------------------------------
+    ensemble_required = [
+        os.path.join(model_dir, 'catboost_model.cbm'),
+        os.path.join(model_dir, 'random_forest_model.pkl')
+    ]
+
+    if all(os.path.exists(path) for path in ensemble_required):
+        try:
+            ensemble_model = EnsembleModel(n_classes=3)
+            ensemble_model.load(model_dir)
+            logger.info("✓ Ensemble model loaded")
+        except Exception as e:
+            logger.warning(f"⚠ Failed to load ensemble model: {e}")
+            ensemble_model = None
+    else:
+        missing = [os.path.basename(path) for path in ensemble_required if not os.path.exists(path)]
+        logger.info(
+            "ℹ️ Skipping ensemble model load (missing files: %s)",
+            ", ".join(missing) if missing else "unknown"
+        )
+        ensemble_model = None
+
+    # ------------------------------------------------------------------
+    # Metadata (best-effort, tolerate missing fields)
+    # ------------------------------------------------------------------
+    metadata = {}
     metadata_path = os.path.join(model_dir, 'metadata.json')
     if os.path.exists(metadata_path):
-        with open(metadata_path, 'r') as f:
-            metadata = json.load(f)
-        
-        sequence_length = metadata.get('sequence_length', 30)
-        feature_columns = metadata.get('feature_columns', [])
-        preprocessor_path = metadata.get('preprocessor', 'preprocessor.pkl')
-        model_type = metadata.get('model_type', 'unknown')
-        print(f"\u2713 Metadata loaded (sequence_length: {sequence_length}, model_type: {model_type})")
-    else:
-        print(f"\u26a0 Metadata not found at {metadata_path}, using defaults")
-        metadata = {"sequence_length": 30, "threshold_percent": 0.5, "feature_columns": [], "model_type": "unknown"}
-        sequence_length = 30
-        feature_columns = []
-        preprocessor_path = 'preprocessor.pkl'
-        model_type = 'unknown'
-
-    # Load preprocessor
-    if os.path.exists(preprocessor_path):
         try:
-            with open(preprocessor_path, 'rb') as f:
-                preprocessor = pickle.load(f)
-            print(f"\u2713 Preprocessor loaded from {preprocessor_path}")
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            if validate_metadata(metadata):
+                logger.info("✓ Metadata validated for ensemble model")
         except Exception as e:
-            print(f"\u26a0 Could not load preprocessor: {e}")
-            raise
+            logger.warning(f"⚠ Failed to load metadata: {e}")
+            metadata = {}
     else:
-        raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
+        logger.info(f"ℹ️ Metadata file not found at {metadata_path}; using defaults")
+
+    # Defaults to ensure downstream code has required keys
+    metadata.setdefault('sequence_length', 30)
+    metadata.setdefault('threshold_percent', 0.5)
+    metadata.setdefault('feature_columns', [])
+    metadata.setdefault('model_type', 'unknown')
+    preprocessor_candidates = []
+    if metadata.get('preprocessor'):
+        preprocessor_candidates.append(metadata['preprocessor'])
+    preprocessor_candidates.extend(['preprocessor.pkl', 'scaler.pkl'])
+
+    # ------------------------------------------------------------------
+    # Feature columns
+    # ------------------------------------------------------------------
+    feature_columns_path = os.path.join(model_dir, 'feature_columns.pkl')
+    if os.path.exists(feature_columns_path):
+        try:
+            with open(feature_columns_path, 'rb') as f:
+                feature_columns = pickle.load(f)
+            logger.info(f"✓ Feature columns loaded ({len(feature_columns)} features)")
+        except Exception as e:
+            logger.warning(f"⚠ Could not load feature columns: {e}")
+            feature_columns = metadata.get('feature_columns', [])
+    else:
+        feature_columns = metadata.get('feature_columns', [])
+        if feature_columns:
+            logger.info("ℹ️ Using feature columns embedded in metadata")
+        else:
+            logger.warning("⚠ Feature columns file not found; predictions may fail if columns mismatch")
+
+    metadata['feature_columns'] = feature_columns
+
+    # ------------------------------------------------------------------
+    # Preprocessor / scaler (try multiple filenames)
+    # ------------------------------------------------------------------
+    preprocessor = None
+    for candidate in preprocessor_candidates:
+        candidate_path = candidate if os.path.isabs(candidate) else os.path.join(model_dir, candidate)
+        if os.path.exists(candidate_path):
+            try:
+                preprocessor = joblib.load(candidate_path)
+                logger.info(f"✓ Preprocessor loaded from {candidate_path}")
+                break
+            except Exception:
+                try:
+                    with open(candidate_path, 'rb') as f:
+                        preprocessor = pickle.load(f)
+                    logger.info(f"✓ Preprocessor loaded from {candidate_path} (pickle fallback)")
+                    break
+                except Exception as e:
+                    logger.warning(f"⚠ Failed to load preprocessor from {candidate_path}: {e}")
+    if preprocessor is None:
+        logger.warning("⚠ No preprocessor/scaler found; predictions will not be available until provided")
+
+    # ------------------------------------------------------------------
+    # Transformer model (new v2 endpoint)
+    # ------------------------------------------------------------------
+    try:
+        load_transformer_model(model_dir)
+    except FileNotFoundError as e:
+        logger.info(f"ℹ️ Transformer assets not found: {e}")
+    except Exception as e:
+        logger.warning(f"⚠ Failed to load transformer model: {e}")
+
+    if transformer_metadata:
+        sequence_length = transformer_metadata.get('sequence_length', metadata.get('sequence_length', 30))
+    else:
+        sequence_length = metadata.get('sequence_length', 30)
 
     # Initialize feature engineer
     feature_engineer = FeatureEngineer()
-    print(f"✓ Feature engineer initialized")
-    
-    print("✓ Model loading completed!")
+    logger.info("✓ Feature engineer initialized")
+
+    logger.info("✓ Model loading completed!")
+
+
+def load_transformer_model(model_dir: str):
+    """Load the transformer regressor v2 model."""
+    global transformer_model, transformer_metadata
+
+    logger.info(f"Loading transformer model via ModelManager from {model_dir}...")
+
+    # Use ModelManager to load/validate/swap the transformer candidate
+    try:
+        model_manager.reload_latest(model_dir)
+        active = model_manager.get_active()
+        if active:
+            transformer_model = active.model
+            transformer_metadata = active.metadata
+            # Ensure feature_columns is populated if manager provided them
+            if active.feature_columns:
+                # assign to the global feature_columns variable for backward compatibility
+                try:
+                    global feature_columns
+                    feature_columns = active.feature_columns
+                except Exception:
+                    pass
+            logger.info(f"\u2713 Transformer model loaded and active from {active.path}")
+        else:
+            raise RuntimeError("ModelManager did not produce an active model")
+    except Exception as e:
+        logger.error(f"Failed to load transformer model via ModelManager: {e}")
+        raise
 
 
 def get_latest_model_dir(base_dir='data/models'):
@@ -298,37 +455,37 @@ async def startup_event():
     """Load models and connect to MongoDB on startup"""
     global ensemble_model
     
-    print(f"Starting up API...")
-    print(f"Current working directory: {os.getcwd()}")
-    print(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
+    logger.info(f"Starting up API...")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
     
     # Connect to MongoDB - REQUIRED for security
     try:
         await db.connect()
-        print("✓ MongoDB connection established")
+        logger.info("✓ MongoDB connection established")
     except Exception as e:
-        print(f"⚠ MongoDB connection failed: {e}")
-        print("⚠ WARNING: API will reject all requests until database is connected")
-        print("⚠ This is intentional for security - authentication requires database")
+        logger.warning(f"⚠ MongoDB connection failed: {e}")
+        logger.warning("⚠ WARNING: API will reject all requests until database is connected")
+        logger.warning("⚠ This is intentional for security - authentication requires database")
     
     # Try to load the latest model
     model_dir = get_latest_model_dir()
     
     if model_dir:
-        print(f"Found model directory: {model_dir}")
+        logger.info(f"Found model directory: {model_dir}")
         try:
             load_models(model_dir)
-            print(f"✓ API ready with models from: {model_dir}")
+            logger.info(f"✓ API ready with models from: {model_dir}")
         except Exception as e:
-            print(f"⚠ Warning: Could not load models: {e}")
-            print("API will run without loaded models. Train models first.")
+            logger.warning(f"⚠ Warning: Could not load models: {e}")
+            logger.warning("API will run without loaded models. Train models first.")
             ensemble_model = None
     else:
-        print("⚠ No models found in any of the expected locations:")
-        print("  - ./data/models")
-        print("  - data/models") 
-        print(f"  - {os.path.join(os.path.dirname(__file__), 'data', 'models')}")
-        print("Please train models first using the training pipeline.")
+        logger.warning("⚠ No models found in any of the expected locations:")
+        logger.warning("  - ./data/models")
+        logger.warning("  - data/models") 
+        logger.warning(f"  - {os.path.join(os.path.dirname(__file__), 'data', 'models')}")
+        logger.warning("Please train models first using the training pipeline.")
         ensemble_model = None
 
 
@@ -336,7 +493,7 @@ async def startup_event():
 async def shutdown_event():
     """Disconnect from MongoDB on shutdown"""
     await db.disconnect()
-    print("✓ Disconnected from MongoDB")
+    logger.info("✓ Disconnected from MongoDB")
 
 
 @app.get("/", response_model=HealthResponse)
@@ -410,23 +567,55 @@ async def database_health_check():
     )
 
 
+# Replace hardcoded ADMIN_SECRET with environment variable
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
+if not ADMIN_SECRET:
+    raise RuntimeError("ADMIN_SECRET environment variable is not set")
+
+
+# Refactor shared logic in /predict and /v1.1/predict endpoints
+# Extract feature generation and prediction logic into a helper function
+def generate_features_and_predict(df, context):
+    """Helper function to generate features and make predictions."""
+    df_features = feature_engineer.generate_all_features(
+        df,
+        order_book_context=context.get('order_book'),
+        ticker_context=context.get('ticker'),
+        create_targets=False
+    )
+
+    # Ensure feature_columns exist and handle missing columns gracefully
+    if not feature_columns:
+        raise RuntimeError("Feature columns are not available for prediction")
+
+    # Reindex to the expected feature columns, filling missing columns with zeros
+    X_all = df_features.reindex(columns=feature_columns).fillna(0)
+
+    # Ensure we have at least sequence_length + 1 rows; if not, pad with zeros at the top
+    required_rows = sequence_length + 1
+    if len(X_all) < required_rows:
+        pad_rows = required_rows - len(X_all)
+        pad_df = pd.DataFrame(0, index=range(pad_rows), columns=feature_columns)
+        X_all = pd.concat([pad_df, X_all], ignore_index=True)
+
+    X = X_all.tail(required_rows)
+    X_scaled = preprocessor.transform(X)
+    X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
+
+    X_regular = X_scaled_df.tail(1).values
+    probabilities = ensemble_model.predict_proba(X_regular)[0]
+    prediction = int(np.argmax(probabilities))
+    confidence = float(probabilities[prediction])
+
+    return prediction, confidence, probabilities, df_features
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(
     request: Request,
     prediction_request: PredictionRequest,
     auth_data: dict = Depends(verify_api_key)
 ):
-    """
-    Get price movement predictions
-    
-    Free Trial: 3 predictions per IP address (no API key needed)
-    With API Key: 3 predictions per minute
-    
-    Returns:
-    - prediction: 0 (no movement), 1 (large up), 2 (large down)
-    - confidence: probability of predicted class
-    - probabilities: all class probabilities
-    """
     if ensemble_model is None:
         raise HTTPException(
             status_code=503,
@@ -434,37 +623,14 @@ async def predict(
         )
 
     try:
-        # Fetch live data
         from data_scraper import DataScraper
         scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
         df = scraper.fetch_historical_("6 hours ago UTC")
         _, context = scraper.fetch_context_data()
 
-        # Generate features
-        df_features = feature_engineer.generate_all_features(
-            df,
-            order_book_context=context.get('order_book'),
-            ticker_context=context.get('ticker'),
-            create_targets=False
-        )
+        prediction, confidence, probabilities, df_features = generate_features_and_predict(df, context)
 
-        # Ensure feature columns match
-        X = df_features[feature_columns].tail(sequence_length + 1)
-        X_scaled = preprocessor.transform(X)
-        X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
-
-        # Prepare for prediction
-        X_regular = X_scaled_df.tail(1).values
-        probabilities = ensemble_model.predict_proba(X_regular)[0]
-        prediction = int(np.argmax(probabilities))
-        confidence = float(probabilities[prediction])
-
-        labels = {
-            0: "No Significant Movement",
-            1: "Large Upward Movement Expected",
-            2: "Large Downward Movement Expected"
-        }
-        prediction_label = labels[prediction]
+        prediction_label = ENSEMBLE_LABELS.get(prediction, "Unknown Movement")
         current_price = float(df['close'].iloc[-1])
         threshold = metadata.get('threshold_percent', 0.5)
         expected_movement = threshold if prediction == 1 else -threshold if prediction == 2 else None
@@ -478,6 +644,7 @@ async def predict(
             expected_movement=expected_movement
         )
     except Exception as e:
+        logger.error(f"Prediction failed: {e}")
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
 
@@ -528,12 +695,24 @@ async def predict_v1_1(
             create_targets=False
         )
         
-        # Get only the feature columns we trained on
-        X = df_features[feature_columns].tail(sequence_length + 1)
-        
+        # Get only the feature columns we trained on, handling missing columns
+        if not feature_columns:
+            raise HTTPException(status_code=503, detail="Feature columns not available")
+
+        X_all = df_features.reindex(columns=feature_columns).fillna(0)
+
+        # Ensure enough rows; pad at the top if necessary
+        required_rows = sequence_length + 1
+        if len(X_all) < required_rows:
+            pad_rows = required_rows - len(X_all)
+            pad_df = pd.DataFrame(0, index=range(pad_rows), columns=feature_columns)
+            X_all = pd.concat([pad_df, X_all], ignore_index=True)
+
+        X = X_all.tail(required_rows)
+
         # Scale features
         X_scaled = preprocessor.transform(X)
-        
+
         # Convert back to DataFrame to use .tail() method
         X_scaled_df = pd.DataFrame(X_scaled, columns=feature_columns, index=X.index)
         
@@ -546,23 +725,12 @@ async def predict_v1_1(
         prediction = int(np.argmax(probabilities))
         confidence = float(probabilities[prediction])
         
-        # Get prediction label
-        labels = {
-            0: "No Significant Movement",
-            1: "Large Upward Movement Expected",
-            2: "Large Downward Movement Expected"
-        }
-        prediction_label = labels[prediction]
-        
-        # Get current price
+        # Define current_price and prediction_label
         current_price = float(df['close'].iloc[-1])
-        
-        # ===== V1.1 ENHANCEMENTS =====
-        
-        # Extract trend information
-        latest_row = df_features.iloc[-1]
+        prediction_label = ENSEMBLE_LABELS.get(prediction, "Unknown Movement")
         
         # Determine short-term trend
+        latest_row = df_features.iloc[-1]
         short_ma = latest_row.get('SMA_20', 0)
         mid_ma = latest_row.get('SMA_50', 0)
         if current_price > short_ma > mid_ma:
@@ -737,6 +905,165 @@ async def predict_v1_1(
             detail=f"Prediction failed: {str(e)}"
         )
 
+@app.post("/v2/predict", response_model=PredictionResponse)
+async def predict_v2(
+    request: Request,
+    prediction_request: PredictionRequest,
+    auth_data: dict = Depends(verify_api_key)
+):
+    """
+    Get predictions using the updated transformer model.
+    """
+    if transformer_model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Transformer model not loaded. Please train and load the model first."
+        )
+
+    try:
+        from data_scraper import DataScraper
+        scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
+        df = scraper.fetch_historical_("6 hours ago UTC")
+        _, context = scraper.fetch_context_data()
+
+        # Generate features
+        df_features = feature_engineer.generate_all_features(
+            df,
+            order_book_context=context.get('order_book'),
+            ticker_context=context.get('ticker'),
+            create_targets=False
+        )
+
+        # Ensure feature columns exist and handle missing columns
+        if not feature_columns:
+            raise HTTPException(status_code=503, detail="Feature columns not available")
+
+        seq_len = int(transformer_metadata.get('sequence_length', sequence_length))
+        X_all = df_features.reindex(columns=feature_columns).fillna(0)
+
+        # Pad if necessary
+        if len(X_all) < seq_len:
+            pad_rows = seq_len - len(X_all)
+            pad_df = pd.DataFrame(0, index=range(pad_rows), columns=feature_columns)
+            X_all = pd.concat([pad_df, X_all], ignore_index=True)
+
+        X = X_all.tail(seq_len)
+        X_scaled = preprocessor.transform(X)
+
+        # Make predictions
+        predictions = transformer_model.predict(X_scaled)
+        prediction = float(predictions[-1])  # Use the last prediction
+
+        # Define current_price and prediction_label
+        current_price = float(df['close'].iloc[-1])
+        prediction_label = "Transformer Prediction"
+
+        return PredictionResponse(
+            symbol=prediction_request.symbol,
+            timestamp=datetime.now().isoformat(),
+            prediction=prediction,
+            prediction_label=prediction_label,
+            confidence=1.0,  # Placeholder for confidence
+            probabilities={},  # Placeholder for probabilities
+            current_price=current_price,
+            expected_movement=None
+        )
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+
+
+@app.post("/v2/transformermodel/keras", response_model=TransformerPredictionResponse)
+async def predict_transformer_keras(
+    request: Request,
+    prediction_request: PredictionRequest,
+    auth_data: dict = Depends(verify_api_key)
+):
+    """
+    V2 endpoint specifically for the custom transformer Keras model.
+    Keeps the older endpoints intact; this one targets the model exported
+    as `transformer_regressor_v2_model.keras` and uses the transformer
+    metadata for sequence length.
+    """
+    if transformer_model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Transformer Keras model not loaded. Please train and load the model first."
+        )
+
+    try:
+        from data_scraper import DataScraper
+
+        scraper = DataScraper(symbol=prediction_request.symbol, interval=prediction_request.interval)
+        df = scraper.fetch_historical_("6 hours ago UTC")
+        _, context = scraper.fetch_context_data()
+
+        # Generate features
+        df_features = feature_engineer.generate_all_features(
+            df,
+            order_book_context=context.get('order_book'),
+            ticker_context=context.get('ticker'),
+            create_targets=False
+        )
+
+        seq_len = int(transformer_metadata.get('sequence_length', sequence_length))
+
+        if not feature_columns:
+            raise HTTPException(status_code=503, detail="Feature columns not available for transformer prediction")
+
+        # Reindex to expected features and fill missing columns with zeros
+        X_all = df_features.reindex(columns=feature_columns).fillna(0)
+
+        # Pad history if shorter than sequence length
+        if len(X_all) < seq_len:
+            pad_rows = seq_len - len(X_all)
+            pad_df = pd.DataFrame(0, index=range(pad_rows), columns=feature_columns)
+            X_all = pd.concat([pad_df, X_all], ignore_index=True)
+
+        X = X_all.tail(seq_len)
+        X_scaled = preprocessor.transform(X)
+
+        # Model expects batch dimension
+        import numpy as _np
+        if X_scaled.ndim == 2:
+            X_input = _np.expand_dims(X_scaled, axis=0)
+        else:
+            X_input = X_scaled
+
+        preds = transformer_model.predict(X_input)
+
+        # Normalize handling of different output shapes
+        if hasattr(preds, 'shape'):
+            if preds.ndim == 3:
+                # e.g., (batch, seq, 1)
+                pred_value = float(preds[0, -1, 0])
+            elif preds.ndim == 2:
+                # e.g., (batch, 1)
+                pred_value = float(preds[0, -1]) if preds.shape[1] > 1 else float(preds[0, 0])
+            elif preds.ndim == 1:
+                pred_value = float(preds[0])
+            else:
+                pred_value = float(preds.flatten()[-1])
+        else:
+            pred_value = float(preds)
+
+        current_price = float(df['close'].iloc[-1])
+
+        return TransformerPredictionResponse(
+            symbol=prediction_request.symbol,
+            timestamp=datetime.now().isoformat(),
+            prediction=pred_value,
+            prediction_label="TransformerModel-Keras-v2",
+            confidence=1.0,
+            probabilities={},
+            current_price=current_price,
+            expected_movement=None
+        )
+
+    except Exception as e:
+        logger.error(f"Transformer Keras prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Transformer prediction failed: {e}")
+
 
 @app.get("/model/info")
 async def model_info():
@@ -768,7 +1095,8 @@ async def model_info():
         "feature_count": len(feature_columns) if feature_columns else 0,
         "n_features": metadata.get('n_features', len(feature_columns) if feature_columns else 0),
         "sequence_length": sequence_length,
-        "model_loaded": ensemble_model is not None,
+        # Model considered loaded if either ensemble or transformer is available
+        "model_loaded": (ensemble_model is not None) or (transformer_model is not None),
         "symbol": metadata.get('symbol', 'N/A'),
         "interval": metadata.get('interval', 'N/A'),
         "training_date": metadata.get('training_date', 'N/A'),
@@ -834,9 +1162,28 @@ async def generate_api_key(
     if admin_secret != ADMIN_SECRET:
         raise HTTPException(status_code=403, detail="Unauthorized")
     
+    # If user already exists, rotate their API key instead of inserting (avoid DuplicateKeyError)
+    existing = await db.db.users.find_one({"email": email})
+    if existing:
+        # generate new api key and update the stored hash
+        new_api_key = f"btc_{uuid.uuid4().hex}"
+        new_hash = bcrypt.hashpw(new_api_key.encode(), bcrypt.gensalt()).decode()
+        await db.db.users.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"api_key_hash": new_hash, "name": name, "quota_limit": 1000, "is_active": True}}
+        )
+        return {
+            "success": True,
+            "api_key": new_api_key,
+            "name": name,
+            "email": email,
+            "quota_limit": "1000 predictions per day",
+            "usage": f"Include header: Authorization: Bearer {new_api_key}"
+        }
+
     # Create user in database (generates API key automatically)
     user = await db.create_user(email=email, name=name, quota_limit=1000)
-    
+
     return {
         "success": True,
         "api_key": user["api_key"],
@@ -905,9 +1252,9 @@ async def revoke_api_key(
 if __name__ == "__main__":
     import uvicorn
     
-    print("\n" + "="*60)
-    print("Starting Crypto Price Movement Prediction API")
-    print("="*60 + "\n")
+    logger.info("\n" + "="*60)
+    logger.info("Starting Crypto Price Movement Prediction API")
+    logger.info("="*60 + "\n")
     
     uvicorn.run(
         app,

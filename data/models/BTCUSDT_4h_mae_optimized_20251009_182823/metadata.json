@@ -1,0 +1,26 @@
+{
+  "symbol": "BTCUSDT",
+  "interval": "4h",
+  "lookahead": 6,
+  "days_trained": 120,
+  "sequence_length": 60,
+  "n_features": 106,
+  "d_model": 64,
+  "num_heads": 4,
+  "num_blocks": 2,
+  "ff_dim": 128,
+  "dropout": 0.1,
+  "loss_type": "mae",
+  "scale_factor": 4.053349187408581,
+  "best_strategy": {
+    "threshold": 0.5,
+    "pred_type": "raw",
+    "n_trades": 26,
+    "direction_acc": 88.46153846153845,
+    "avg_return": 2.2200556903467326,
+    "total_return": 51.061280877974845,
+    "win_rate": 88.46153846153845
+  },
+  "timestamp": "20251009_182823",
+  "optimization": "reduced_days_120"
+}

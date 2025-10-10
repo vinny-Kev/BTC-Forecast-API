@@ -189,225 +189,56 @@ Contact Kevin Maglaqui: **kevinroymaglaqui27@gmail.com**
 - **Motor** - Async MongoDB driver
 
 ### Machine Learning
-- **CatBoost** - Gradient boosting
-- **Scikit-learn** - Random Forest, Logistic Regression, Preprocessing
-- **TensorFlow/Keras** - Meta-learner LSTM
+# BTC Forecast API — Minimal Deployment README
 
-### Data & Features
-- **Binance API** - Live market data
-- **20 Technical Indicators** - Engineered features
-- **Real-time Preprocessing** - RobustScaler for outlier handling
+This repo contains a FastAPI microservice that serves ML predictions for Bitcoin price movement.
 
----
+Purpose of this cleanup commit:
+- Remove temporary/debug files
+- Keep a single canonical README with deployment and local run instructions
+- Ensure requirements.txt contains runtime deps
+- Tighten .gitignore to avoid committing secrets and large models
 
-## 🔧 Architecture
+Quick start (local):
 
-### Data Pipeline
-```
-Binance API → Feature Engineering → RobustScaler → Ensemble Models → Meta-Learner → Prediction
-```
+1. Create a virtualenv and install dependencies:
 
-### Technical Features (20 total)
-- **Volatility**: ATR, ATR%, volatility_5/10/20/50
-- **Volume**: Volume MA (7/14/21), OBV
-- **Price Patterns**: BB width, HL range, price-to-SMA ratios
-- **Momentum**: MACD, MACD signal, ROC
-- **Returns**: 50-period returns
-- **Time**: Hour cosine encoding
-
-### Prediction Classes
-- **0**: No Significant Movement (< 0.2% change in 6 periods)
-- **1**: Large Upward Movement (> 0.2% up in 6 periods)
-- **2**: Large Downward Movement (> 0.2% down in 6 periods)
-
----
-
-## 🚀 Local Development
-
-### Prerequisites
-- Python 3.11+
-- MongoDB Atlas account (or local MongoDB)
-- Binance API keys
-
-### Setup
-```bash
-# Clone repository
-git clone https://github.com/vinny-Kev/BTC-Forecast-API.git
-cd BTC-Forecast-API
-
-# Install dependencies
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env and add your credentials
 ```
 
-### Environment Variables (.env)
-```bash
-# Binance API
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_API_SECRET=your_binance_api_secret
+2. Copy and edit environment variables:
 
-# MongoDB
-MONGODB_URL=mongodb+srv://<user>:<password>@cluster0.xxx.mongodb.net/?retryWrites=true&w=majority
-DATABASE_NAME=btc_prediction_api
-
-# Admin Secret (for API key management)
-ADMIN_SECRET=your_admin_secret_key
+```powershell
+copy .env.example .env
+# edit .env and add your MONGODB_URL, BINANCE keys (if used), and ADMIN_SECRET
 ```
 
-### Run API Locally
-```bash
-python prediction_api.py
-# API runs on http://localhost:8000
-# Docs at http://localhost:8000/docs
+3. Run the API locally:
+
+```powershell
+python -m uvicorn prediction_api:app --host 127.0.0.1 --port 8000
 ```
+
+Endpoints of interest:
+- GET / or /health — health
+- GET /model/info — model metadata and loaded state
+- POST /v2/transformermodel/keras — transformer model regression (returns float prediction)
+- POST /v1.1/predict — enriched ensemble predictions
+- POST /api-keys/generate — admin-only; requires X-Admin-Secret header
+
+Security & deployment notes:
+- Do NOT commit .env or any secret values. Use `.env.example` as template.
+- Model artifacts (large .cbm/.pkl/.keras files) should be deployed via Git LFS or a model artifact store; they are excluded by .gitignore.
+- Ensure `MONGODB_URL` points to your Atlas or managed DB for production.
+- Set `ADMIN_SECRET` in the environment for admin operations.
+
+If you'd like, I can:
+- Add a CI workflow to build & test the container
+- Add an admin `/model/deploy` endpoint that accepts a model archive and atomically swaps it via `ModelManager`
 
 ---
 
-## 📈 Performance Metrics
-
-### Model Performance
-| Metric | Train | Test |
-|--------|-------|------|
-| **Accuracy** | 82.90% | 65.76% |
-| **Precision (Macro)** | 49.40% | 40.60% |
-| **Recall (Macro)** | 87.14% | 47.34% |
-| **F1 Score (Macro)** | 55.52% | 39.48% |
-| **ROC AUC (OvR)** | 0.9648 | 0.7097 |
-
-### Overfitting Analysis
-- Train-Test Accuracy Gap: **17.15%**
-- Train-Test F1 Gap: **16.04%**
-- Train-Test ROC Gap: **25.51%**
-
-*Note: Some overfitting present but ROC AUC of 0.71 indicates reasonable generalization*
-
-### API Performance
-- **Response Time**: < 2 seconds (live data fetch + inference)
-- **Uptime Target**: 99.9%
-- **Auto-scaling**: Enabled on Render
-
----
-
-## 🚢 Deployment
-
-### Render Configuration
-```yaml
-services:
-  - type: web
-    name: btc-prediction-api
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn prediction_api:app --host 0.0.0.0 --port $PORT
-```
-
-### Required Environment Variables (Render)
-- `BINANCE_API_KEY`
-- `BINANCE_API_SECRET`
-- `MONGODB_URL` (MongoDB Atlas connection string)
-- `DATABASE_NAME`
-- `ADMIN_SECRET`
-
-### Git LFS for Model Files
-Model files are tracked with Git LFS:
-```bash
-git lfs track "*.cbm"
-git lfs track "*.pkl"
-git lfs track "*.h5"
-```
-
----
-
-## 🗄️ Database Schema
-
-### Users Collection
-```javascript
-{
-  _id: "uuid",
-  email: "user@example.com",
-  name: "User Name",
-  api_key_hash: "bcrypt_hash",
-  created_at: ISODate("2025-10-08T12:00:00Z"),
-  requests_today: 42,
-  quota_limit: 1000,
-  last_quota_reset: ISODate("2025-10-08T00:00:00Z"),
-  is_active: true
-}
-```
-
-### Guest Usage Collection
-```javascript
-{
-  ip_address: "192.168.1.1",
-  calls_used: 2,
-  calls_limit: 3,
-  first_call: ISODate("2025-10-08T12:00:00Z"),
-  last_reset: ISODate("2025-10-08T12:00:00Z")
-}
-```
-
-### Predictions Collection
-```javascript
-{
-  _id: "uuid",
-  user_id: "user_uuid" | "guest",
-  ip_address: "192.168.1.1",
-  timestamp: ISODate("2025-10-08T12:00:00Z"),
-  symbol: "BTCUSDT",
-  interval: "1m",
-  prediction: 1,
-  confidence: 0.85,
-  model_version: "1.0.0",
-  latency_ms: 1234.5,
-  result: { ... }
-}
-```
-
----
-
-## 📝 API Documentation
-
-Interactive Swagger documentation available at:
-- **Local**: http://localhost:8000/docs
-- **Production**: https://btc-forecast-api.onrender.com/docs
-
----
-
-## 💼 Contact & Support
-
-**Developer**: Kevin Roy Maglaqui
-
-- **Email**: kevinroymaglaqui27@gmail.com
-- **Portfolio**: [kevinroymaglaqui.is-a.dev](https://kevinroymaglaqui.is-a.dev)
-- **GitHub**: [@vinny-Kev](https://github.com/vinny-Kev)
-
-### Enterprise Solutions
-For custom integrations, higher rate limits, or white-label solutions, please reach out!
-
----
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
----
-
-## 🎯 Roadmap
-
-- [x] Stacked ensemble with meta-learner
-- [x] MongoDB integration for persistence
-- [x] V1.1 API with enhanced predictions
-- [x] API key management system
-- [ ] WebSocket support for real-time predictions
-- [ ] Multi-symbol support (ETH, SOL, etc.)
-- [ ] Historical prediction accuracy tracking
-- [ ] Custom alert system
-
----
-
-**Built with ❤️ by Kevin Roy Maglaqui**
-
-*Last Updated: October 8, 2025*
+Last updated: 2025-10-10

@@ -6,6 +6,7 @@ import bcrypt
 import certifi
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -67,9 +68,25 @@ class Database:
             'last_quota_reset': datetime.now(timezone.utc),
             'is_active': True
         }
-        await self.db.users.insert_one(user)
-        user['api_key'] = api_key
-        return user
+        try:
+            await self.db.users.insert_one(user)
+            user['api_key'] = api_key
+            return user
+        except DuplicateKeyError:
+            # If a user with this email already exists (race condition or previous insert),
+            # rotate the API key for that user and return the updated record.
+            existing = await self.db.users.find_one({'email': email})
+            if existing:
+                new_api_key = api_key
+                new_hash = bcrypt.hashpw(new_api_key.encode(), bcrypt.gensalt()).decode()
+                await self.db.users.update_one(
+                    {'_id': existing['_id']},
+                    {'$set': {'api_key_hash': new_hash, 'name': name, 'quota_limit': quota_limit, 'is_active': True}}
+                )
+                existing['api_key'] = new_api_key
+                return existing
+            # If we couldn't find the existing user for some reason, re-raise the error
+            raise
     
     async def get_user_by_api_key(self, api_key: str):
         users = await self.db.users.find({'is_active': True}).to_list(length=None)

@@ -1,18 +1,27 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Environment
-.env
-.venv
+# Virtual environments
+.venv/
 env/
 venv/
 
-# Model files (too large for git)
+# Environment and secret files
+.env
+.env.local
+.env.*.local
+
+# Model artifacts
 *.h5
 *.cbm
 *.pkl
+data/models/
+
+# Temporary / extraction
+tmp_kmodel_extract/
+*.tmp
+*.log
 
 # Jupyter
 .ipynb_checkpoints
@@ -25,12 +34,6 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Test files
+# Tests
 test_*.py
 check_*.py
-fix_*.py
-verify_*.py
-
-# Temporary files
-*.tmp
-*.log
